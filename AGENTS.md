@@ -46,7 +46,8 @@ add the test and lint commands here. "A passing test run" in section 2 means tho
    `git fetch origin && git switch -c <issue>-<slug> --no-track origin/development` (for example `7-skeleton`;
    just `<slug>` when there is no issue).
    `--no-track` keeps a bare `git push` from targeting `development`.
-3. **Implement one step.** Stay inside the step; note anything else you find on the issue instead of fixing it.
+3. **Implement one step**, in bite-sized commits (section 3). Stay inside the step; note anything else you find on
+   the issue instead of fixing it.
 4. **Open a draft pull request.** Push the branch and open the draft PR against `development` in the same step:
    `git push -u origin <branch> && gh pr create --draft --base development`. The body links the issue
    (`Closes #N`), names the plan step, and lists what was tested.
@@ -66,6 +67,9 @@ add the test and lint commands here. "A passing test run" in section 2 means tho
 - Never work on `master`. `development` reaches `master` only through an owner.
 - Never commit on `development` directly, and never push it.
 - The only things an agent pushes are the branch of its open pull request and tags.
+- Keep commits bite-sized, so a human can read through them one at a time: one logical change per commit, with a
+  message that says what and why. Keep moves, renames and formatting in their own commits, apart from changes in
+  behaviour.
 - Never squash, never force-push, never rebase a pushed branch. Bring `development` in by merging.
 - Delete a merged branch with `git branch -d`, never `git branch -D`.
 - Commits are signed. Every commit message ends with the `Co-Authored-By:` line of the model that wrote the change,
