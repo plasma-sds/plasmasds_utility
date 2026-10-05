@@ -21,7 +21,8 @@ Decisions already made (do not re-open them without an owner):
 - Private data is fetched over SSH with paramiko; public data is downloaded with urllib. rsync is a possible future
   backend, not a current one.
 - The utility owns the server base paths and the default local data directory. Each client owns its prefix (its
-  package name) and the tree below it. The local tree mirrors the server tree.
+  package name) and the tree below it. A client may set its own working directory, which overrides the utility's
+  default. The local tree mirrors the server tree.
 - Packaged defaults are read-only. On first use they are copied as JSON into a per-user directory, and that copy is
   the only configuration file the utility writes. Nothing is ever written under `site-packages`.
 - Data is downloaded only when it is missing locally. By default the server is not checked if non-dummy data is
@@ -42,7 +43,8 @@ add the test and lint commands here. "A passing test run" in section 2 means tho
 1. **Pick the work.** Take an item from the board, normally one in *Ready*. A plan is broken into sub-issues of its
    parent issue, one per step. Set the item to *In progress*.
 2. **Branch off `development`.**
-   `git fetch origin && git switch -c <issue>-<slug> --no-track origin/development` (for example `7-skeleton`).
+   `git fetch origin && git switch -c <issue>-<slug> --no-track origin/development` (for example `7-skeleton`;
+   just `<slug>` when there is no issue).
    `--no-track` keeps a bare `git push` from targeting `development`.
 3. **Implement one step.** Stay inside the step; note anything else you find on the issue instead of fixing it.
 4. **Open a draft pull request.** Push the branch and open the draft PR against `development` in the same step:
@@ -55,8 +57,9 @@ add the test and lint commands here. "A passing test run" in section 2 means tho
    on the merged state. Push, and state the result in the PR.
 7. **Mark it ready.** `gh pr ready`, and set the board item to *In review*. Owners review and merge; agents never
    merge.
-8. **Clean up after the merge.** Tag the step if it was a plan step (section 4). Delete the local branch with
-   `git branch -d <branch>`. If `-d` refuses, the branch is not merged: stop and find out why.
+8. **Clean up after the merge.** Tag the step if it was a plan step (section 4). Bring the local `development` up
+   to date with `git switch development && git pull --ff-only` (syncing is not working on it), then delete the
+   branch with `git branch -d <branch>`. If `-d` still refuses, the branch is not merged: stop and find out why.
 
 ## 3. Git rules
 
