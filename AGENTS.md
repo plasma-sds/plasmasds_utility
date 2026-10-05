@@ -2,7 +2,7 @@
 
 Instructions for coding agents working in this repository. Human contributors are welcome to follow them too.
 
-Section 1 and the review lens in section 5 are specific to this repository. Sections 2–4 and 6 are shared
+Section 1 and the review lens in section 5 are specific to this repository. Sections 2–4, 6 and 7 are shared
 conventions for plasma-sds repositories developed with agents.
 
 ## 1. Project
@@ -119,3 +119,10 @@ The review checks correctness first, then these four properties.
 - **Discussions:** for design questions an owner has to decide (*Ideas* or *Q&A*), linked from the affected issue.
   Record the outcome on that issue, dated.
 - **Language:** English, concise. This is a public repository; write accordingly.
+
+## 7. Text formatting
+
+- In prose files (Markdown documentation, the README, agent instruction files), start a new line only for a new sentence.
+  Headings, paragraphs, list items, table rows and code blocks start on new lines as usual.
+  Never wrap a sentence at a fixed width; inside a list item, indent the following sentences to the item's text.
+- Source files keep the line-length limit their formatter sets.
