@@ -1,5 +1,7 @@
 import pytest
 
+from plasmasds_utility import _config
+
 ENV_VARIABLES = (
     "XDG_CONFIG_HOME",
     "XDG_DATA_HOME",
@@ -18,4 +20,5 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(home / "AppData" / "Local"))
     for variable in ENV_VARIABLES:
         monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setattr(_config, "_settings", None)
     return home

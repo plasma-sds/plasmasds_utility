@@ -18,15 +18,28 @@ log       ``$XDG_STATE_HOME/plasmasds``       ``%LOCALAPPDATA%\plasmasds``
 An ``XDG_*`` variable that is empty or not an absolute path is ignored, as the XDG
 specification requires; so is an empty or relative ``LOCALAPPDATA``, which falls back to
 ``~/AppData/Local``.
+
+Settings come from the packaged ``data/defaults.json``, read on every new process, with
+the user's ``config.json`` in :func:`config_dir` applied on top, key by key.
+The user file holds only what the user changed, so a release that changes a default
+(host, port, server roots, host key) reaches every user who has not overridden it.
 """
 
+import json
+import logging
 import os
+from importlib import resources
 from pathlib import Path
 
 from plasmasds_utility.exceptions import ConfigError
 
 _APP = "plasmasds"
 _WINDOWS = os.name == "nt"
+CONFIG_FILE = "config.json"
+
+logger = logging.getLogger("plasmasds_utility")
+
+_settings = None
 
 
 def _base(variable, fallback):
@@ -101,3 +114,98 @@ def env_data_dir():
     if not path.is_absolute():
         raise ConfigError(f"PLASMASDS_DATA_DIR must be an absolute path, got {value!r}")
     return path
+
+
+def _defaults():
+    """Return the packaged defaults as a dict."""
+    text = resources.files("plasmasds_utility").joinpath("data", "defaults.json")
+    return json.loads(text.read_text(encoding="utf-8"))
+
+
+def _read_user(path):
+    """Return the contents of the user configuration file, or {} if it does not exist.
+
+    Raises
+    ------
+    ConfigError
+        If the file cannot be read, is not valid JSON, or is not a JSON object.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except OSError as error:
+        raise ConfigError(f"cannot read {path}: {error}") from error
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise ConfigError(
+            f"{path} is not valid JSON (line {error.lineno}, column {error.colno}): "
+            f"{error.msg}"
+        ) from error
+    if not isinstance(data, dict):
+        raise ConfigError(
+            f"{path} must contain a JSON object, got {type(data).__name__}"
+        )
+    return data
+
+
+def _merge(defaults, user, path):
+    """Apply the user settings on top of the defaults and validate the result.
+
+    An unknown key only logs a warning, because clients pin the utility: two clients
+    in two environments may share one ``config.json`` while running different versions,
+    and a key added by the newer version must not break the older one.
+    A known key with a value of the wrong type is an error.
+
+    Raises
+    ------
+    ConfigError
+        If a value has the wrong type, or a working directory is not an absolute path.
+    """
+    merged = dict(defaults)
+    for key, value in user.items():
+        if key not in defaults:
+            logger.warning(
+                "%s: ignoring unknown setting %r (from a newer plasmasds_utility?)",
+                path,
+                key,
+            )
+            continue
+        expected = type(defaults[key])
+        if type(value) is not expected:
+            raise ConfigError(
+                f"{path}: setting {key!r} must be of type {expected.__name__}, "
+                f"got {type(value).__name__}"
+            )
+        merged[key] = value
+    for prefix, directory in merged["working_dirs"].items():
+        if not isinstance(directory, str) or not Path(directory).is_absolute():
+            raise ConfigError(
+                f"{path}: working directory for {prefix!r} must be an absolute path, "
+                f"got {directory!r}"
+            )
+    return merged
+
+
+def settings():
+    """Return the settings: the packaged defaults with the user overrides applied.
+
+    The result is read once per process and cached; saving the user configuration
+    clears the cache.
+
+    Returns
+    -------
+    dict
+        The merged settings. Do not modify it.
+
+    Raises
+    ------
+    ConfigError
+        If the user configuration file cannot be read or holds an invalid value.
+    """
+    global _settings
+    if _settings is None:
+        path = config_dir() / CONFIG_FILE
+        _settings = _merge(_defaults(), _read_user(path), path)
+    return _settings

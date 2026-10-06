@@ -1,0 +1,12 @@
+{
+  "host": "deep.reak.bme.hu",
+  "port": 72,
+  "user": "data",
+  "private_root": "private_html",
+  "public_root": "public_html",
+  "public_url": "https://deep.reak.bme.hu/~data",
+  "host_keys": [
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKFX6Lc5FaHHrGq7Xp+czQ8mkjyATaCqfudo7P/IEAPj"
+  ],
+  "working_dirs": {}
+}
