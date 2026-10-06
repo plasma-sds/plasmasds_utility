@@ -7,7 +7,13 @@ import sys
 
 import pytest
 
-from plasmasds_utility import ConfigError, DataClient, PathError, _config
+from plasmasds_utility import (
+    ConfigError,
+    DataClient,
+    PathError,
+    TransferError,
+    _config,
+)
 
 logger = logging.getLogger("plasmasds_utility")
 
@@ -274,3 +280,70 @@ def test_local_path_rejects_an_invalid_key_before_any_io(home):
         DataClient("renate-od").local_path("../x")
     assert list(home.iterdir()) == []
     assert logger.handlers == []
+
+
+@pytest.fixture
+def public_server(http_server):
+    """The local HTTP server, configured as the public data server."""
+    path = _config.config_dir() / _config.CONFIG_FILE
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"public_url": http_server.url("/~data")}), "utf-8")
+    return http_server
+
+
+LAST_MODIFIED = "Fri, 23 Feb 2018 21:48:01 GMT"
+
+
+def test_get_downloads_a_missing_public_file(public_server):
+    public_server.serve(
+        "/~data/renate-od/atomic_data/Na/x.h5",
+        {"body": b"data", "last_modified": LAST_MODIFIED},
+    )
+    client = DataClient("renate-od")
+    path = client.get("atomic_data/Na/x.h5")
+    assert path == client.local_path("atomic_data/Na/x.h5", private=False)
+    assert path.read_bytes() == b"data"
+    assert path.stat().st_mtime == 1519422481
+
+
+def test_get_returns_a_present_file_without_contacting_the_server(public_server):
+    public_server.serve("/~data/renate-od/a.h5", {"body": b"data"})
+    client = DataClient("renate-od")
+    client.get("a.h5")
+    client.get("a.h5")
+    assert public_server.requests["/~data/renate-od/a.h5"] == 1
+
+
+def test_get_uses_a_file_placed_by_hand(public_server):
+    client = DataClient("renate-od")
+    path = client.local_path("a.h5", private=False)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"mine")
+    assert client.get("a.h5").read_bytes() == b"mine"
+    assert sum(public_server.requests.values()) == 0
+
+
+def test_get_quotes_the_key_in_the_url(public_server):
+    public_server.serve("/~data/renate-od/a%20b/%C3%BC.h5", {"body": b"x"})
+    assert DataClient("renate-od").get("a b/ü.h5").read_bytes() == b"x"
+
+
+def test_get_reports_a_missing_file(public_server):
+    client = DataClient("renate-od")
+    with pytest.raises(TransferError, match="not on the public server"):
+        client.get("missing.h5")
+    assert not client.local_path("missing.h5", private=False).exists()
+
+
+def test_get_refuses_a_directory_in_the_way(public_server):
+    client = DataClient("renate-od")
+    client.local_path("a.h5", private=False).mkdir(parents=True)
+    with pytest.raises(PathError, match="it is not a file"):
+        client.get("a.h5")
+    assert sum(public_server.requests.values()) == 0
+
+
+def test_get_rejects_an_invalid_key_before_any_io(home):
+    with pytest.raises(PathError, match="invalid data key"):
+        DataClient("renate-od").get("/abs")
+    assert list(home.iterdir()) == []
