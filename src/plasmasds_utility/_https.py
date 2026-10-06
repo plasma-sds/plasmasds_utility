@@ -98,7 +98,7 @@ def _fetch_once(url, target, timeout):
         raise
 
 
-def download_https(url, target, *, timeout=30, attempts=3, backoff=1.0):
+def download(url, target, *, timeout=30, attempts=3, backoff=1.0):
     """Download a public file over HTTPS to target.
 
     The local file gets the server's modification time from the ``Last-Modified``

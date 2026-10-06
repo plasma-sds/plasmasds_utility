@@ -171,7 +171,7 @@ class DataClient:
         if path.exists():
             raise PathError(f"cannot store {key!r} at {path}: it is not a file")
         url = _paths.public_url(_config.settings(), self.prefix, key)
-        return _https.download_https(url, path)
+        return _https.download(url, path)
 
     def set_working_dir(self, path):
         """Save the working directory for this client in the user configuration.
