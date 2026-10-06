@@ -31,6 +31,7 @@ import logging
 import os
 import tempfile
 from importlib import resources
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from plasmasds_utility.exceptions import ConfigError
@@ -38,10 +39,12 @@ from plasmasds_utility.exceptions import ConfigError
 _APP = "plasmasds"
 _WINDOWS = os.name == "nt"
 CONFIG_FILE = "config.json"
+LOG_FILE = "plasmasds.log"
 
 logger = logging.getLogger("plasmasds_utility")
 
 _settings = None
+_log_handlers = []
 
 
 def _base(variable, fallback):
@@ -269,3 +272,60 @@ def save_working_dir(prefix, directory):
     except OSError as error:
         raise ConfigError(f"cannot write {path}: {error}") from error
     _settings = None
+
+
+def start_logging():
+    """Attach the log file and a stderr handler to the ``plasmasds_utility`` logger.
+
+    Called on first use, never at import; calling it again does nothing.
+    Messages of level INFO and above go to ``plasmasds.log`` in :func:`log_dir`, which
+    rotates at 1 MB and keeps three old files.
+    Warnings and errors also go to stderr, so they stay visible: once the logger has a
+    handler, Python no longer prints them by default.
+
+    On Windows, rotation fails while another process has the log open; the logging
+    module then prints the error to stderr and carries on.
+
+    Raises
+    ------
+    ConfigError
+        If the log directory cannot be created.
+    """
+    if _log_handlers:
+        return
+    directory = log_dir()
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise ConfigError(
+            f"cannot create the log directory {directory}: {error}"
+        ) from error
+    file_handler = RotatingFileHandler(
+        directory / LOG_FILE,
+        maxBytes=1_000_000,
+        backupCount=3,
+        encoding="utf-8",
+        delay=True,
+    )
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    )
+    stderr_handler = logging.StreamHandler()
+    stderr_handler.setLevel(logging.WARNING)
+    stderr_handler.setFormatter(
+        logging.Formatter("plasmasds_utility %(levelname)s: %(message)s")
+    )
+    for handler in (file_handler, stderr_handler):
+        logger.addHandler(handler)
+        _log_handlers.append(handler)
+    logger.setLevel(logging.INFO)
+
+
+def _stop_logging():
+    """Detach and close the handlers added by :func:`start_logging` (for tests)."""
+    for handler in _log_handlers:
+        logger.removeHandler(handler)
+        handler.close()
+    _log_handlers.clear()
+    logger.setLevel(logging.NOTSET)

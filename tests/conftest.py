@@ -21,4 +21,6 @@ def home(tmp_path, monkeypatch):
     for variable in ENV_VARIABLES:
         monkeypatch.delenv(variable, raising=False)
     monkeypatch.setattr(_config, "_settings", None)
-    return home
+    yield home
+    # Close the log file, or Windows cannot delete the temporary directory.
+    _config._stop_logging()
