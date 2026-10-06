@@ -1,23 +1,51 @@
-"""Tests against the real public data server (marker ``network``).
+"""Tests against the real data server.
 
-They run by default, so CI checks public access on every push (#6). Offline, run
+``network``: public downloads over HTTPS. They run by default, so CI checks public
+access on every push (#6). Offline, run
 ``pixi run test -m "not private and not network"``.
+
+``private``: downloads over SFTP with a real key; deselected by default. Run
+``PLASMASDS_TEST_SSH_KEY=/path/to/key pixi run test -m private``. The test home has no
+``known_hosts``, so these also check the host key shipped with the package.
 """
+
+import os
+import time
 
 import pytest
 
-from plasmasds_utility import DataClient
+import plasmasds_utility
+from plasmasds_utility import AuthError, DataClient, _config, _sftp
 
-# renate's own access-test file, unchanged since 2018.
-KEY = "test_dataset/access_tests/public_test.txt"
+# renate's own access-test files, unchanged since 2018.
+PUBLIC_KEY = "test_dataset/access_tests/public_test.txt"
+PRIVATE_KEY = "test_dataset/access_tests/private_test.txt"
+
+# Expanded now, before the test home replaces HOME.
+SSH_KEY = os.path.expanduser(os.environ.get("PLASMASDS_TEST_SSH_KEY", ""))
 
 
 @pytest.mark.network
 def test_public_download_from_the_data_server(home):
+    # Test the public route only, as for a user without a key, without SSH.
+    settings = _config.settings()
+    server = (settings["host"], settings["port"], settings["user"])
+    _sftp._unavailable[server] = AuthError("no key in this test")
     client = DataClient("renate-od", working_dir=home / "data")
-    path = client.get(KEY)
-    assert path == home / "data" / "public" / "test_dataset" / "access_tests" / (
-        "public_test.txt"
-    )
+    path = client.get(PUBLIC_KEY)
+    assert path == client.local_path(PUBLIC_KEY, private=False)
     assert path.read_bytes() == b"Data access test file"
     assert path.stat().st_mtime == 1519422481  # Last-Modified: 2018-02-23 21:48:01 UTC
+
+
+@pytest.mark.private
+def test_private_download_from_the_data_server(home):
+    if not SSH_KEY:
+        pytest.skip("set PLASMASDS_TEST_SSH_KEY to a key for the private data server")
+    plasmasds_utility.set_ssh_key(SSH_KEY)
+    client = DataClient("renate-od", working_dir=home / "data")
+    path = client.get(PRIVATE_KEY)
+    assert path == client.local_path(PRIVATE_KEY, private=True)
+    assert path.stat().st_size == 21
+    assert time.gmtime(path.stat().st_mtime)[:3] == (2018, 2, 23)
+    assert not client.local_path(PRIVATE_KEY, private=False).exists()

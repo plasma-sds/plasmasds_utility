@@ -42,7 +42,7 @@ The environment is managed with [pixi](https://pixi.sh); its configuration lives
 
 - `pixi run test`: the test suite on the newest supported Python.
 - `pixi run -e py311 test`: the test suite on one Python version (`py311` to `py314`), as CI runs it.
-- `pixi run test -m private`: the tests that need SSH access to the private data server; they are deselected by default.
+- `PLASMASDS_TEST_SSH_KEY=/path/to/key pixi run test -m private`: the tests that need SSH access to the private data server, with that key; they are deselected by default and skipped without the variable.
 - Tests marked `network` download from the public data server and run by default.
   Offline, use `pixi run test -m "not private and not network"`: a `-m` on the command line replaces the default selection, so `-m "not network"` alone would select the private tests.
 - `pixi run lint`: ruff lint and format check; `pixi run ruff format .` applies the formatting.
