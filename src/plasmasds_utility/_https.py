@@ -1,34 +1,21 @@
-"""Download files, streaming them to disk and moving them into place atomically.
+"""Download public files over HTTPS, streaming them to disk.
 
-A download goes to a uniquely named ``.part`` file in the target directory and is
-moved over the target with :func:`os.replace` only when it is complete, so a failed
+Downloads are written through :func:`plasmasds_utility._files.writing`, so a failed
 or interrupted transfer never leaves a partial file under the target name.
 """
 
-import contextlib
 import email.utils
 import http.client
-import os
 import shutil
-import tempfile
 import time
 import urllib.error
 import urllib.request
 
+from plasmasds_utility import _files
 from plasmasds_utility._config import logger
-from plasmasds_utility.exceptions import PathError, TransferError
+from plasmasds_utility.exceptions import TransferError
 
 _CHUNK = 1024 * 1024
-
-
-def _make_parent(target):
-    """Create the target's directory, or raise PathError naming it."""
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-    except OSError as error:
-        raise PathError(
-            f"cannot create the directory {target.parent}: {error}"
-        ) from error
 
 
 def _server_time(last_modified, url):
@@ -67,35 +54,18 @@ def _fetch_once(url, target, timeout):
     Raises HTTPError for an HTTP error status, and OSError or HTTPException for
     connection problems, timeouts and truncated transfers.
     """
-    fd, temporary = tempfile.mkstemp(
-        dir=target.parent, prefix=f".{target.name}.", suffix=".part"
-    )
-    try:
-        with os.fdopen(fd, "wb") as file:
-            with urllib.request.urlopen(url, timeout=timeout) as response:
-                expected = _content_length(response.headers, url)
-                last_modified = response.headers.get("Last-Modified")
-                shutil.copyfileobj(response, file, _CHUNK)
-            received = file.tell()
+    with _files.writing(target) as partial:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            expected = _content_length(response.headers, url)
+            last_modified = response.headers.get("Last-Modified")
+            shutil.copyfileobj(response, partial.file, _CHUNK)
+        received = partial.file.tell()
         # A server that closes early gives a short read, not an exception.
         if expected is not None and received != expected:
             raise ConnectionError(
                 f"transfer cut short: received {received} of {expected} bytes"
             )
-        mtime = _server_time(last_modified, url)
-        if mtime is not None:
-            try:
-                os.utime(temporary, (mtime, mtime))
-            except OSError as error:
-                # The file matters more than its timestamp; do not download again.
-                logger.warning(
-                    "cannot set the modification time of %s: %s", target, error
-                )
-        os.replace(temporary, target)
-    except BaseException:
-        with contextlib.suppress(FileNotFoundError):
-            os.unlink(temporary)
-        raise
+        partial.mtime = _server_time(last_modified, url)
 
 
 def download(url, target, *, timeout=30, attempts=3, backoff=1.0):
@@ -131,7 +101,7 @@ def download(url, target, *, timeout=30, attempts=3, backoff=1.0):
     TransferError
         If the download fails; the message names the URL and the reason.
     """
-    _make_parent(target)
+    _files.make_parent(target)
     if not url.startswith("https://"):
         logger.warning("downloading over an unencrypted connection: %s", url)
     for attempt in range(1, attempts + 1):

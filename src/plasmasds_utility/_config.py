@@ -28,16 +28,15 @@ The packaged ``working_dirs`` is always empty; it is there so that the user's
 ``working_dirs`` is validated like every other key.
 """
 
-import contextlib
 import json
 import logging
 import os
-import tempfile
 import tomllib
 from importlib import resources
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from plasmasds_utility import _files
 from plasmasds_utility.exceptions import ConfigError
 
 _APP = "plasmasds"
@@ -221,24 +220,14 @@ def settings():
 
 
 def _write_atomic(path, text):
-    """Write text to path through a temporary file in the same directory.
+    """Write text to path as UTF-8, atomically (see :func:`_files.writing`).
 
-    The temporary file is moved into place with :func:`os.replace`, so readers see
-    either the old or the new content. On failure the temporary file is removed and
-    an existing file is left unchanged.
+    Readers see either the old or the new content. On failure the temporary file is
+    removed and an existing file is left unchanged.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as file:
-            file.write(text)
-        os.replace(temporary, path)
-    except BaseException:
-        with contextlib.suppress(FileNotFoundError):
-            os.unlink(temporary)
-        raise
+    with _files.writing(path) as partial:
+        partial.file.write(bytes(text, "utf-8"))
 
 
 def save_working_dir(prefix, directory):

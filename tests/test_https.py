@@ -5,7 +5,7 @@ import types
 
 import pytest
 
-from plasmasds_utility import PathError, TransferError, _https
+from plasmasds_utility import PathError, TransferError, _files, _https
 
 LAST_MODIFIED = "Fri, 23 Feb 2018 21:48:01 GMT"
 TIMESTAMP = 1519422481
@@ -169,7 +169,7 @@ def test_failing_utime_keeps_the_download(
     def refuse(*args, **kwargs):
         raise PermissionError("not allowed here")
 
-    monkeypatch.setattr(_https.os, "utime", refuse)
+    monkeypatch.setattr(_files.os, "utime", refuse)
     target = home / "a.txt"
     with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
         _https.download(http_server.url("/a.txt"), target)
