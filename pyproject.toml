@@ -33,6 +33,7 @@ testpaths = ["tests"]
 addopts = ["-ra", "--strict-markers", "-m", "not private"]
 markers = [
     "private: needs SSH access to the private data server; run with -m private",
+    "network: downloads from the public data server; runs by default",
 ]
 
 [tool.ruff.lint]
