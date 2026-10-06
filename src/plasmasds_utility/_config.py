@@ -23,6 +23,8 @@ Settings come from the packaged ``data/defaults.json``, read on every new proces
 the user's ``config.json`` in :func:`config_dir` applied on top, key by key.
 The user file holds only what the user changed, so a release that changes a default
 (host, port, server roots, host key) reaches every user who has not overridden it.
+The packaged ``working_dirs`` is always empty; it is there so that the user's
+``working_dirs`` is validated like every other key.
 """
 
 import contextlib

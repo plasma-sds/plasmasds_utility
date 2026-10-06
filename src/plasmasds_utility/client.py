@@ -22,7 +22,8 @@ class DataClient:
     prefix : str
         The client's directory name on the server, for example ``"renate-od"``.
         It may contain ASCII letters, digits, ``.``, ``_`` and ``-``, and must start
-        with a letter or a digit.
+        with a letter or a digit. ``config.json`` and ``plasmasds.log`` are reserved,
+        because on Windows those files share a directory with the client directories.
     working_dir : str or os.PathLike, optional
         A directory to use for this client's data, for this object only; it takes
         precedence over every other setting (see :meth:`client_dir`).
@@ -72,8 +73,8 @@ class DataClient:
         Raises
         ------
         ConfigError
-            If ``PLASMASDS_DATA_DIR`` is a relative path, or the user configuration
-            file is invalid.
+            If ``PLASMASDS_DATA_DIR`` is a relative path, the user configuration
+            file is invalid, or the log directory cannot be created.
         """
         _config.start_logging()
         if self._working_dir is not None:
@@ -112,7 +113,8 @@ class DataClient:
             If the directory cannot be created, for example because a file has that
             name.
         ConfigError
-            If the user configuration file is invalid or cannot be written.
+            If the user configuration file is invalid or cannot be written, or the
+            log directory cannot be created.
         """
         _config.start_logging()
         if path is None:
