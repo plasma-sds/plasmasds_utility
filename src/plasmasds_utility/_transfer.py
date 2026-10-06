@@ -45,6 +45,22 @@ def _server_time(last_modified, url):
         return None
 
 
+def _content_length(headers, url):
+    """Return the Content-Length header as an int, or None if absent or malformed."""
+    value = headers.get("Content-Length")
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        logger.warning(
+            "%s sent a malformed Content-Length (%r); the size is not checked",
+            url,
+            value,
+        )
+        return None
+
+
 def _fetch_once(url, target, timeout):
     """Download url to target once.
 
@@ -57,18 +73,24 @@ def _fetch_once(url, target, timeout):
     try:
         with os.fdopen(fd, "wb") as file:
             with urllib.request.urlopen(url, timeout=timeout) as response:
-                expected = response.headers.get("Content-Length")
+                expected = _content_length(response.headers, url)
                 last_modified = response.headers.get("Last-Modified")
                 shutil.copyfileobj(response, file, _CHUNK)
             received = file.tell()
         # A server that closes early gives a short read, not an exception.
-        if expected is not None and received != int(expected):
+        if expected is not None and received != expected:
             raise ConnectionError(
                 f"transfer cut short: received {received} of {expected} bytes"
             )
         mtime = _server_time(last_modified, url)
         if mtime is not None:
-            os.utime(temporary, (mtime, mtime))
+            try:
+                os.utime(temporary, (mtime, mtime))
+            except OSError as error:
+                # The file matters more than its timestamp; do not download again.
+                logger.warning(
+                    "cannot set the modification time of %s: %s", target, error
+                )
         os.replace(temporary, target)
     except BaseException:
         with contextlib.suppress(FileNotFoundError):

@@ -161,6 +161,32 @@ def test_unusable_last_modified_keeps_the_download_time(
     assert "no usable Last-Modified header" in caplog.text
 
 
+def test_failing_utime_keeps_the_download(
+    http_server, home, caplog, monkeypatch, sleeps
+):
+    http_server.serve("/a.txt", {"body": b"x", "last_modified": LAST_MODIFIED})
+
+    def refuse(*args, **kwargs):
+        raise PermissionError("not allowed here")
+
+    monkeypatch.setattr(_transfer.os, "utime", refuse)
+    target = home / "a.txt"
+    with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
+        _transfer.download_https(http_server.url("/a.txt"), target)
+    assert target.read_bytes() == b"x"
+    assert http_server.requests["/a.txt"] == 1
+    assert "cannot set the modification time" in caplog.text
+
+
+def test_malformed_content_length_skips_the_size_check(http_server, home, caplog):
+    http_server.serve("/a.txt", {"body": b"hello", "length": "five"})
+    target = home / "a.txt"
+    with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
+        _transfer.download_https(http_server.url("/a.txt"), target)
+    assert target.read_bytes() == b"hello"
+    assert "malformed Content-Length ('five')" in caplog.text
+
+
 def test_unencrypted_url_logs_a_warning(http_server, home, caplog):
     http_server.serve("/a.txt", {"body": b"x"})
     with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
