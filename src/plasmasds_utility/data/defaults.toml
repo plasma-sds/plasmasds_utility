@@ -41,6 +41,12 @@ host_keys = [
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKFX6Lc5FaHHrGq7Xp+czQ8mkjyATaCqfudo7P/IEAPj",
 ]
 
+# Private SSH key for the private data, as an absolute path. Empty: use the keys in
+# the SSH agent and the standard ~/.ssh/id_* files. Set it with
+# plasmasds_utility.set_ssh_key(path); a key with a passphrase must be in the agent,
+# because the utility never asks for a passphrase.
+ssh_key = ""
+
 # Always empty here. In config.json it maps a client prefix to its saved working
 # directory (an absolute path), as set by DataClient.set_working_dir.
 working_dirs = {}

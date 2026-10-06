@@ -259,3 +259,47 @@ class DataClient:
             return
         _config.save_working_dir(self.prefix, None)
         _config.logger.info("removed the working directory for %r", self.prefix)
+
+
+def set_ssh_key(path):
+    """Save the SSH private key used for private data, for every client package.
+
+    Without a saved key, the keys in the SSH agent and the standard ``~/.ssh/id_*``
+    files are tried. A key with a passphrase must be loaded into the agent
+    (``ssh-add``), because the utility never asks for a passphrase.
+
+    Parameters
+    ----------
+    path : str or os.PathLike or None
+        The private key file. ``~`` is expanded and a relative path is taken
+        relative to the current directory. None removes the saved key.
+
+    Returns
+    -------
+    pathlib.Path or None
+        The absolute key file that was saved, or None if it was removed.
+
+    Raises
+    ------
+    PathError
+        If the file does not exist.
+    ConfigError
+        If the user configuration file is invalid or cannot be written, or the log
+        directory cannot be created.
+
+    Examples
+    --------
+    >>> import plasmasds_utility
+    >>> plasmasds_utility.set_ssh_key("~/.ssh/plasmasds_deep")  # doctest: +SKIP
+    """
+    _config.start_logging()
+    if path is None:
+        _config.save_ssh_key(None)
+        _config.logger.info("removed the saved SSH key")
+        return None
+    key = Path(path).expanduser().absolute()
+    if not key.is_file():
+        raise PathError(f"cannot use {key} as the SSH key: no such file")
+    _config.save_ssh_key(str(key))
+    _config.logger.info("SSH key set to %s", key)
+    return key

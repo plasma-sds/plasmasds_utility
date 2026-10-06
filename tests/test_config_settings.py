@@ -32,6 +32,7 @@ def test_defaults_have_the_expected_keys_and_types():
         "public_root": str,
         "public_url": str,
         "host_keys": list,
+        "ssh_key": str,
         "working_dirs": dict,
     }
     assert defaults["working_dirs"] == {}
@@ -76,11 +77,11 @@ def test_settings_are_cached(config_file):
 
 
 def test_unknown_key_is_ignored_with_a_warning(config_file, caplog):
-    write_json(config_file, {"ssh_key": "/somewhere"})
+    write_json(config_file, {"future_setting": "/somewhere"})
     with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
         settings = _config.settings()
-    assert "ssh_key" not in settings
-    assert "ignoring unknown setting 'ssh_key'" in caplog.text
+    assert "future_setting" not in settings
+    assert "ignoring unknown setting 'future_setting'" in caplog.text
     assert str(config_file) in caplog.text
 
 
@@ -136,3 +137,28 @@ def test_unreadable_file_is_a_config_error(config_file):
 def test_reading_settings_creates_nothing(home):
     _config.settings()
     assert list(home.iterdir()) == []
+
+
+def test_no_ssh_key_by_default():
+    assert _config._defaults()["ssh_key"] == ""
+    assert _config.ssh_key() is None
+
+
+def test_ssh_key_must_be_absolute(config_file):
+    write_json(config_file, {"ssh_key": "keys/id"})
+    with pytest.raises(ConfigError, match="ssh_key must be an absolute path"):
+        _config.settings()
+
+
+def test_configured_ssh_key_is_returned(config_file, home):
+    key = home / "id_test"
+    key.write_text("not a real key", encoding="utf-8")
+    write_json(config_file, {"ssh_key": str(key)})
+    assert _config.ssh_key() == key
+
+
+def test_missing_ssh_key_file_is_a_config_error(config_file, home):
+    write_json(config_file, {"ssh_key": str(home / "gone")})
+    with pytest.raises(ConfigError, match="does not exist") as error:
+        _config.ssh_key()
+    assert "set_ssh_key" in str(error.value)

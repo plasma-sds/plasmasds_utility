@@ -193,6 +193,10 @@ def _merge(defaults, user, path):
                 f"{path}: working directory for {prefix!r} must be an absolute path, "
                 f"got {directory!r}"
             )
+    if merged["ssh_key"] and not Path(merged["ssh_key"]).is_absolute():
+        raise ConfigError(
+            f"{path}: ssh_key must be an absolute path, got {merged['ssh_key']!r}"
+        )
     return merged
 
 
@@ -247,7 +251,6 @@ def save_working_dir(prefix, directory):
     ConfigError
         If the existing file is invalid, or the file cannot be written.
     """
-    global _settings
     settings()  # refuse to rewrite a file that does not validate
     path = config_dir() / CONFIG_FILE
     data = _read_user(path)
@@ -260,10 +263,65 @@ def save_working_dir(prefix, directory):
         working_dirs[prefix] = directory
     if not working_dirs:
         del data["working_dirs"]
-    try:
-        _write_atomic(
-            path, json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    _write_user(path, data)
+
+
+def save_ssh_key(key_path):
+    """Save or clear the SSH key path in the user configuration.
+
+    Parameters
+    ----------
+    key_path : str or None
+        The absolute path of the private key, or None to remove the setting.
+
+    Raises
+    ------
+    ConfigError
+        If the existing file is invalid, or the file cannot be written.
+    """
+    settings()  # refuse to rewrite a file that does not validate
+    path = config_dir() / CONFIG_FILE
+    data = _read_user(path)
+    if key_path is None:
+        if "ssh_key" not in data:
+            return  # nothing to remove; do not create the file
+        del data["ssh_key"]
+    else:
+        data["ssh_key"] = key_path
+    _write_user(path, data)
+
+
+def ssh_key():
+    """Return the configured SSH key file, or None to use the agent and ~/.ssh.
+
+    Returns
+    -------
+    pathlib.Path or None
+        The key file.
+
+    Raises
+    ------
+    ConfigError
+        If a key is configured but the file does not exist.
+    """
+    value = settings()["ssh_key"]
+    if not value:
+        return None
+    key = Path(value)
+    if not key.is_file():
+        raise ConfigError(
+            f"the SSH key {key} set in {config_dir() / CONFIG_FILE} does not exist; "
+            "set it again with plasmasds_utility.set_ssh_key()"
         )
+    return key
+
+
+def _write_user(path, data):
+    """Write the user configuration atomically and clear the settings cache."""
+    global _settings
+    text = json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    try:
+        _write_atomic(path, text)
     except OSError as error:
         raise ConfigError(f"cannot write {path}: {error}") from error
     _settings = None

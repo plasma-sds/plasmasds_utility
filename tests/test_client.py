@@ -7,6 +7,7 @@ import sys
 
 import pytest
 
+import plasmasds_utility
 from plasmasds_utility import (
     ConfigError,
     DataClient,
@@ -347,3 +348,40 @@ def test_get_rejects_an_invalid_key_before_any_io(home):
     with pytest.raises(PathError, match="invalid data key"):
         DataClient("renate-od").get("/abs")
     assert list(home.iterdir()) == []
+
+
+@pytest.fixture
+def key_file(home):
+    key = home / ".ssh" / "plasmasds_test"
+    key.parent.mkdir()
+    key.write_text("not a real key", encoding="utf-8")
+    return key
+
+
+def test_set_ssh_key_saves_the_absolute_path(key_file):
+    assert plasmasds_utility.set_ssh_key(key_file) == key_file
+    assert _config.ssh_key() == key_file
+
+
+def test_set_ssh_key_expands_user_and_relative_paths(key_file, home, monkeypatch):
+    assert plasmasds_utility.set_ssh_key("~/.ssh/plasmasds_test") == key_file
+    monkeypatch.chdir(home / ".ssh")
+    assert plasmasds_utility.set_ssh_key("plasmasds_test") == key_file
+
+
+def test_set_ssh_key_rejects_a_missing_file(home):
+    with pytest.raises(PathError, match="no such file"):
+        plasmasds_utility.set_ssh_key(home / "missing")
+    assert not (_config.config_dir() / _config.CONFIG_FILE).exists()
+
+
+def test_set_ssh_key_none_clears_it(key_file):
+    plasmasds_utility.set_ssh_key(key_file)
+    assert plasmasds_utility.set_ssh_key(None) is None
+    assert _config.ssh_key() is None
+
+
+def test_set_ssh_key_logs_the_change(key_file):
+    plasmasds_utility.set_ssh_key(key_file)
+    text = (_config.log_dir() / _config.LOG_FILE).read_text("utf-8")
+    assert f"SSH key set to {key_file}" in text
