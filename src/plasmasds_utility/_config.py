@@ -25,9 +25,11 @@ The user file holds only what the user changed, so a release that changes a defa
 (host, port, server roots, host key) reaches every user who has not overridden it.
 """
 
+import contextlib
 import json
 import logging
 import os
+import tempfile
 from importlib import resources
 from pathlib import Path
 
@@ -209,3 +211,61 @@ def settings():
         path = config_dir() / CONFIG_FILE
         _settings = _merge(_defaults(), _read_user(path), path)
     return _settings
+
+
+def _write_atomic(path, text):
+    """Write text to path through a temporary file in the same directory.
+
+    The temporary file is moved into place with :func:`os.replace`, so readers see
+    either the old or the new content. On failure the temporary file is removed and
+    an existing file is left unchanged.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as file:
+            file.write(text)
+        os.replace(temporary, path)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temporary)
+        raise
+
+
+def save_working_dir(prefix, directory):
+    """Save or clear the working directory of one client in the user configuration.
+
+    Other entries in the file, including keys this version does not know, are kept.
+
+    Parameters
+    ----------
+    prefix : str
+        The client prefix.
+    directory : str or None
+        The absolute working directory, or None to remove the saved entry.
+
+    Raises
+    ------
+    ConfigError
+        If the existing file is invalid, or the file cannot be written.
+    """
+    global _settings
+    settings()  # refuse to rewrite a file that does not validate
+    path = config_dir() / CONFIG_FILE
+    data = _read_user(path)
+    working_dirs = data.setdefault("working_dirs", {})
+    if directory is None:
+        working_dirs.pop(prefix, None)
+    else:
+        working_dirs[prefix] = directory
+    if not working_dirs:
+        del data["working_dirs"]
+    try:
+        _write_atomic(
+            path, json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+        )
+    except OSError as error:
+        raise ConfigError(f"cannot write {path}: {error}") from error
+    _settings = None
