@@ -3,7 +3,7 @@
 import re
 from pathlib import Path
 
-from plasmasds_utility import _config, _paths, _transfer
+from plasmasds_utility import _config, _https, _paths
 from plasmasds_utility.exceptions import PathError
 
 _PREFIX = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
@@ -171,7 +171,7 @@ class DataClient:
         if path.exists():
             raise PathError(f"cannot store {key!r} at {path}: it is not a file")
         url = _paths.public_url(_config.settings(), self.prefix, key)
-        return _transfer.download_https(url, path)
+        return _https.download_https(url, path)
 
     def set_working_dir(self, path):
         """Save the working directory for this client in the user configuration.
