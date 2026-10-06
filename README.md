@@ -21,6 +21,7 @@ The design and the decisions that amend it are in [issue #6](https://github.com/
 - `master` holds released code and is updated from `development` by the owners only.
 - `development` is the integration branch.
   All work happens on feature branches and arrives through pull requests into `development`.
+- The development environment is managed with [pixi](https://pixi.sh): `pixi run test` runs the tests and `pixi run lint` checks the code.
 - Design questions go to [Discussions](https://github.com/plasma-sds/plasmasds_utility/discussions); planned work is tracked as issues.
 
 This repository is developed largely by LLM coding agents under review by the owners.
