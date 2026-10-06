@@ -25,7 +25,8 @@ _DEVICE_NAMES = {
     *(f"COM{n}" for n in range(1, 10)),
     *(f"LPT{n}" for n in range(1, 10)),
 }
-_FORBIDDEN = re.compile(r"[\\:\x00]")
+# Separators, drive and stream markers, and characters Windows does not allow in names.
+_FORBIDDEN = re.compile(r'[\\:<>"|?*\x00-\x1f]')
 
 
 def _invalid(key, reason):
@@ -33,7 +34,7 @@ def _invalid(key, reason):
 
 
 def check_key(key):
-    """Check a data key and split it into its parts.
+    r"""Check a data key and split it into its parts.
 
     Parameters
     ----------
@@ -48,9 +49,9 @@ def check_key(key):
     Raises
     ------
     PathError
-        If the key is not a string, is empty or absolute, contains a backslash, ``:``
-        or a NUL character, or has a part that is empty, ``.``, ``..``, ends in a dot
-        or a space, or is a Windows device name such as ``NUL`` or ``com1.txt``.
+        If the key is not a string, is empty or absolute, contains ``\ : < > " | ? *``
+        or a control character, or has a part that is empty, ``.``, ``..``, ends in a
+        dot or a space, or is a Windows device name such as ``NUL`` or ``com1.txt``.
     """
     if not isinstance(key, str):
         raise _invalid(

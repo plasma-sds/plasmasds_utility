@@ -65,7 +65,7 @@ data.local_path("atomic_data/Na/rates.h5", public=True)
 # local:   <client directory>/public/atomic_data/Na/rates.h5
 ```
 
-A key must be relative and may not contain `..`, `.`, empty parts, `\`, `:`, parts ending in a dot or a space, or Windows device names such as `NUL` or `com1.txt`.
+A key must be relative and may not contain `..`, `.`, empty parts, the characters `\ : < > " | ? *` or control characters, parts ending in a dot or a space, or Windows device names such as `NUL` or `com1.txt`.
 The rules are the same on every platform, so a key that works on Linux also works on Windows; an invalid key raises `PathError` naming the part that is wrong.
 
 ### The configuration file
