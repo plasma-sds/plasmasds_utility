@@ -26,7 +26,7 @@ data = DataClient("renate-od")
 path = data.get("atomic_data/Na/rates.h5")  # local path; downloaded if missing
 ```
 
-For now `get` handles public data only: if the local public copy exists it is returned straight away, without contacting the server; otherwise it is downloaded over HTTPS.
+For now `get` handles public data only, even if a private copy is present: if the local public copy exists it is returned straight away, without contacting the server; otherwise it is downloaded over HTTPS.
 The download is written to a temporary file and moved into place only when complete, and the local file keeps the server's modification time.
 Private data, and the full order of where `get` looks, come in the next step.
 
