@@ -33,6 +33,28 @@ def _invalid(key, reason):
     return PathError(f"invalid data key {key!r}: {reason}")
 
 
+def windows_name_problem(name):
+    """Return why Windows would mangle a file or directory name, or None.
+
+    Used for every part of a key and for the client prefix.
+
+    Parameters
+    ----------
+    name : str
+        One path component.
+
+    Returns
+    -------
+    str or None
+        The reason, or None if the name is fine.
+    """
+    if name[-1] in ". ":
+        return f"{name!r} ends in a dot or a space"
+    if name.split(".")[0].upper() in _DEVICE_NAMES:
+        return f"{name!r} is a reserved device name on Windows"
+    return None
+
+
 def check_key(key):
     r"""Check a data key and split it into its parts.
 
@@ -69,10 +91,9 @@ def check_key(key):
         if part in ("", ".", ".."):
             name = "an empty part" if not part else repr(part)
             raise _invalid(key, f"{name} is not allowed")
-        if part[-1] in ". ":
-            raise _invalid(key, f"part {part!r} ends in a dot or a space")
-        if part.split(".")[0].upper() in _DEVICE_NAMES:
-            raise _invalid(key, f"part {part!r} is a reserved device name on Windows")
+        problem = windows_name_problem(part)
+        if problem:
+            raise _invalid(key, f"part {problem}")
     return parts
 
 

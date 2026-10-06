@@ -40,6 +40,22 @@ def test_reserved_prefixes(prefix):
     assert "plasmasds.log" in str(error.value)
 
 
+@pytest.mark.parametrize(
+    ("prefix", "reason"),
+    [
+        ("renate.", "ends in a dot or a space"),
+        ("con", "reserved device name"),
+        ("NUL", "reserved device name"),
+        ("com1.data", "reserved device name"),
+    ],
+)
+def test_prefixes_windows_would_mangle(prefix, reason):
+    with pytest.raises(PathError, match=f"invalid client prefix {prefix!r}"):
+        DataClient(prefix)
+    with pytest.raises(PathError, match=reason):
+        DataClient(prefix)
+
+
 def test_construction_reads_and_writes_nothing(home):
     DataClient("renate-od", working_dir=home / "data")
     assert list(home.iterdir()) == []

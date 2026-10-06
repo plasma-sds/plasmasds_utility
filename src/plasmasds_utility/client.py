@@ -24,6 +24,8 @@ class DataClient:
         It may contain ASCII letters, digits, ``.``, ``_`` and ``-``, and must start
         with a letter or a digit. ``config.json`` and ``plasmasds.log`` are reserved,
         because on Windows those files share a directory with the client directories.
+        As for data keys, it may not end in a dot or be a Windows device name such as
+        ``nul``.
     working_dir : str or os.PathLike, optional
         A directory to use for this client's data, for this object only; it takes
         precedence over every other setting (see :meth:`client_dir`).
@@ -53,6 +55,9 @@ class DataClient:
                 f"{_config.CONFIG_FILE} and {_config.LOG_FILE} next to the client "
                 "directories (on Windows), so these names are reserved"
             )
+        problem = _paths.windows_name_problem(prefix)
+        if problem:
+            raise PathError(f"invalid client prefix {prefix!r}: {problem}")
         self.prefix = prefix
         self._working_dir = (
             None if working_dir is None else Path(working_dir).expanduser().absolute()
