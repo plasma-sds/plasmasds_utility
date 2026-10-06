@@ -99,32 +99,34 @@ class DataClient:
         ``PLASMASDS_DATA_DIR`` or an explicit ``working_dir`` takes precedence
         (see :meth:`client_dir`); a warning is logged when one does.
 
+        Use :meth:`clear_working_dir` to go back to the default.
+
         Parameters
         ----------
-        path : str or os.PathLike or None
+        path : str or os.PathLike
             The directory. ``~`` is expanded and a relative path is taken relative to
-            the current directory. None removes the saved directory, so the default
-            applies again.
+            the current directory.
 
         Returns
         -------
-        pathlib.Path or None
-            The absolute directory that was saved, or None if it was removed.
+        pathlib.Path
+            The absolute directory that was saved.
 
         Raises
         ------
         PathError
-            If the directory cannot be created, for example because a file has that
-            name.
+            If ``path`` is None, or the directory cannot be created, for example
+            because a file has that name.
         ConfigError
             If the user configuration file is invalid or cannot be written, or the
             log directory cannot be created.
         """
-        _config.start_logging()
         if path is None:
-            _config.save_working_dir(self.prefix, None)
-            _config.logger.info("removed the working directory for %r", self.prefix)
-            return None
+            raise PathError(
+                f"no working directory given for {self.prefix!r}; use "
+                "clear_working_dir() to go back to the default"
+            )
+        _config.start_logging()
         directory = Path(path).expanduser().absolute()
         try:
             directory.mkdir(parents=True, exist_ok=True)
@@ -156,3 +158,22 @@ class DataClient:
                 self.prefix,
             )
         return directory
+
+    def clear_working_dir(self):
+        """Remove the saved working directory for this client.
+
+        Later :class:`DataClient` objects with this prefix use the default again (see
+        :meth:`client_dir`). The directory itself and its data are left alone.
+        Nothing is written if no working directory was saved.
+
+        Raises
+        ------
+        ConfigError
+            If the user configuration file is invalid or cannot be written, or the
+            log directory cannot be created.
+        """
+        _config.start_logging()
+        if self.prefix not in _config.settings()["working_dirs"]:
+            return
+        _config.save_working_dir(self.prefix, None)
+        _config.logger.info("removed the working directory for %r", self.prefix)

@@ -155,14 +155,42 @@ def test_set_working_dir_below_a_file_is_a_path_error(home):
         DataClient("renate-od").set_working_dir(home / "file" / "data")
 
 
-def test_set_working_dir_none_restores_the_default(home):
+def test_set_working_dir_none_is_a_path_error(home):
+    with pytest.raises(PathError, match=r"use clear_working_dir\(\)"):
+        DataClient("renate-od").set_working_dir(None)
+    assert list(home.iterdir()) == []  # rejected before any I/O
+
+
+def test_clear_working_dir_restores_the_default(home):
     client = DataClient("renate-od")
     client.set_working_dir(home / "data")
-    assert client.set_working_dir(None) is None
+    assert client.clear_working_dir() is None
     assert DataClient("renate-od").client_dir() == (
         _config.default_data_dir() / "renate-od"
     )
     assert (home / "data").is_dir()  # the directory itself is left alone
+
+
+def test_clear_working_dir_keeps_other_clients(home):
+    DataClient("renate-od").set_working_dir(home / "renate")
+    DataClient("synref").set_working_dir(home / "synref")
+    DataClient("renate-od").clear_working_dir()
+    assert DataClient("synref").client_dir() == home / "synref"
+
+
+def test_clear_working_dir_without_a_saved_one_writes_nothing(caplog):
+    with caplog.at_level(logging.INFO, logger="plasmasds_utility"):
+        DataClient("renate-od").clear_working_dir()
+    assert not (_config.config_dir() / _config.CONFIG_FILE).exists()
+    assert "removed" not in caplog.text
+
+
+def test_clear_working_dir_logs_the_change(home):
+    client = DataClient("renate-od")
+    client.set_working_dir(home / "data")
+    client.clear_working_dir()
+    text = (_config.log_dir() / _config.LOG_FILE).read_text("utf-8")
+    assert "removed the working directory for 'renate-od'" in text
 
 
 def test_set_working_dir_logs_the_change(home):
