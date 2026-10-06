@@ -89,3 +89,67 @@ def test_local_path_private_and_public(home):
 def test_local_path_rejects_invalid_keys(home, key, reason):
     with pytest.raises(PathError, match="invalid data key"):
         _paths.local_path(home, key, public=False)
+
+
+SETTINGS = {
+    "private_root": "private_html",
+    "public_url": "https://deep.reak.bme.hu/~data",
+}
+
+
+def test_private_remote():
+    assert _paths.private_remote(
+        SETTINGS, "renate-od", "atomic_data/Na/rates.h5"
+    ) == PurePosixPath("private_html/renate-od/atomic_data/Na/rates.h5")
+
+
+def test_private_remote_is_posix_on_every_platform():
+    path = _paths.private_remote(SETTINGS, "renate-od", "a/b.h5")
+    assert str(path) == "private_html/renate-od/a/b.h5"
+
+
+def test_private_remote_with_an_absolute_root():
+    settings = {**SETTINGS, "private_root": "/srv/data"}
+    assert str(_paths.private_remote(settings, "renate-od", "a.h5")) == (
+        "/srv/data/renate-od/a.h5"
+    )
+
+
+@pytest.mark.parametrize(("key", "reason"), INVALID_KEYS[:4])
+def test_private_remote_rejects_invalid_keys(key, reason):
+    with pytest.raises(PathError, match="invalid data key"):
+        _paths.private_remote(SETTINGS, "renate-od", key)
+
+
+def test_public_url():
+    assert _paths.public_url(SETTINGS, "renate-od", "atomic_data/Na/rates.h5") == (
+        "https://deep.reak.bme.hu/~data/renate-od/atomic_data/Na/rates.h5"
+    )
+
+
+def test_public_url_tolerates_a_trailing_slash():
+    settings = {**SETTINGS, "public_url": "https://deep.reak.bme.hu/~data/"}
+    assert _paths.public_url(settings, "renate-od", "a.h5") == (
+        "https://deep.reak.bme.hu/~data/renate-od/a.h5"
+    )
+
+
+@pytest.mark.parametrize(
+    ("key", "encoded"),
+    [
+        ("a b/c d.h5", "a%20b/c%20d.h5"),
+        ("ü/é.h5", "%C3%BC/%C3%A9.h5"),
+        ("a#b?c.h5", "a%23b%3Fc.h5"),
+        ("a%b.h5", "a%25b.h5"),
+    ],
+)
+def test_public_url_percent_encodes_the_key(key, encoded):
+    assert _paths.public_url(SETTINGS, "renate-od", key) == (
+        f"https://deep.reak.bme.hu/~data/renate-od/{encoded}"
+    )
+
+
+@pytest.mark.parametrize(("key", "reason"), INVALID_KEYS[:4])
+def test_public_url_rejects_invalid_keys(key, reason):
+    with pytest.raises(PathError, match="invalid data key"):
+        _paths.public_url(SETTINGS, "renate-od", key)

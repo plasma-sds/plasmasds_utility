@@ -10,6 +10,8 @@ drive, every path built from it stays inside its base directory.
 """
 
 import re
+from pathlib import PurePosixPath
+from urllib.parse import quote
 
 from plasmasds_utility.exceptions import PathError
 
@@ -97,3 +99,57 @@ def local_path(client_dir, key, *, public):
     """
     parts = check_key(key)
     return client_dir.joinpath("public" if public else "private", *parts)
+
+
+def private_remote(settings, prefix, key):
+    """Return the SFTP path of a private data file on the server.
+
+    Parameters
+    ----------
+    settings : dict
+        The merged settings; ``private_root`` is used.
+    prefix : str
+        The client prefix.
+    key : str
+        The data key.
+
+    Returns
+    -------
+    pathlib.PurePosixPath
+        ``<private_root>/<prefix>/<key>``; relative to the SSH user's home unless
+        ``private_root`` is absolute.
+
+    Raises
+    ------
+    PathError
+        If the key is invalid (see :func:`check_key`).
+    """
+    parts = check_key(key)
+    return PurePosixPath(settings["private_root"], prefix, *parts)
+
+
+def public_url(settings, prefix, key):
+    """Return the HTTPS URL of a public data file.
+
+    Parameters
+    ----------
+    settings : dict
+        The merged settings; ``public_url`` is used.
+    prefix : str
+        The client prefix.
+    key : str
+        The data key.
+
+    Returns
+    -------
+    str
+        ``<public_url>/<prefix>/<key>``, with the key percent-encoded as UTF-8 and
+        its ``/`` separators kept.
+
+    Raises
+    ------
+    PathError
+        If the key is invalid (see :func:`check_key`).
+    """
+    check_key(key)
+    return f"{settings['public_url'].rstrip('/')}/{quote(prefix)}/{quote(key)}"
