@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "plasmasds_utility"
+dynamic = ["version"]
+description = "Move data between the plasma-sds data server and a local working directory."
+readme = "README.md"
+license = "LGPL-2.1-only"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = ["paramiko>=4"]
+classifiers = [
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+
+[project.urls]
+Repository = "https://github.com/plasma-sds/plasmasds_utility"
+Issues = "https://github.com/plasma-sds/plasmasds_utility/issues"
+
+[tool.hatch.version]
+path = "src/plasmasds_utility/__init__.py"
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "README.md", "LICENSE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers", "-m", "not private"]
+markers = [
+    "private: needs SSH access to the private data server; run with -m private",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D"]
