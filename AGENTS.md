@@ -41,7 +41,7 @@ The environment is managed with [pixi](https://pixi.sh); its configuration lives
 
 - `pixi run test`: the test suite on the newest supported Python.
 - `pixi run -e py311 test`: the test suite on one Python version (`py311` to `py314`), as CI runs it.
-- `pixi run test -m private`: the tests that need SSH access to the private data server; they are skipped by default.
+- `pixi run test -m private`: the tests that need SSH access to the private data server; they are deselected by default.
 - `pixi run lint`: ruff lint and format check; `pixi run ruff format .` applies the formatting.
 
 "A passing test run" in section 2 means `pixi run lint` and `pixi run test` both pass.
