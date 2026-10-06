@@ -260,6 +260,8 @@ def save_working_dir(prefix, directory):
     settings()  # refuse to rewrite a file that does not validate
     path = config_dir() / CONFIG_FILE
     data = _read_user(path)
+    if directory is None and prefix not in data.get("working_dirs", {}):
+        return  # nothing to remove; do not create the file
     working_dirs = data.setdefault("working_dirs", {})
     if directory is None:
         working_dirs.pop(prefix, None)

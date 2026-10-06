@@ -70,9 +70,16 @@ def test_clearing_the_last_entry_removes_working_dirs(config_file, home):
     assert read_json(config_file) == {}
 
 
-def test_clearing_without_a_file_is_harmless(config_file):
+def test_clearing_without_a_file_creates_none(config_file):
     _config.save_working_dir("renate-od", None)
-    assert read_json(config_file) == {}
+    assert not config_file.exists()
+
+
+def test_clearing_an_unsaved_prefix_leaves_the_file_alone(config_file, home):
+    _config.save_working_dir("synref", str(home / "synref"))
+    before = config_file.read_bytes()
+    _config.save_working_dir("renate-od", None)
+    assert config_file.read_bytes() == before
 
 
 def test_invalid_existing_file_is_not_overwritten(config_file, home):
