@@ -5,17 +5,21 @@ available to every test in this folder, so this file must keep its name.
 
 The ``home`` fixture is ``autouse``: it runs for every test, even those that do not ask
 for it, and keeps the whole suite away from the real home, config and log folders.
-The ``http_server`` fixture is a local web server whose answers each test scripts.
+The ``http_server`` fixture is a local web server whose answers each test scripts, and
+``sftp_server`` a local SFTP server configured as the private data server.
 """
 
 import collections
+import json
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import paramiko
 import pytest
+from _sftp_server import StubSFTPServer
 
-from plasmasds_utility import _config
+from plasmasds_utility import _config, _sftp
 
 
 class FakeServer:
@@ -92,6 +96,7 @@ ENV_VARIABLES = (
     "XDG_DATA_HOME",
     "XDG_STATE_HOME",
     "PLASMASDS_DATA_DIR",
+    "SSH_AUTH_SOCK",  # never use the real SSH agent
 )
 
 
@@ -107,5 +112,51 @@ def home(tmp_path, monkeypatch):
         monkeypatch.delenv(variable, raising=False)
     monkeypatch.setattr(_config, "_settings", None)
     yield home
+    _sftp.close_all()
     # Close the log file, or Windows cannot delete the temporary directory.
     _config._stop_logging()
+
+
+@pytest.fixture(scope="session")
+def ssh_keys():
+    """An RSA host key for the server and an RSA key for the client.
+
+    Generated once per test run, because generating keys is slow; paramiko cannot
+    generate ED25519 keys, and the shipped ED25519 key is tested on its own.
+    """
+    return paramiko.RSAKey.generate(2048), paramiko.RSAKey.generate(2048)
+
+
+def write_config(**settings):
+    """Write the user configuration file with these settings."""
+    path = _config.config_dir() / _config.CONFIG_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(settings), encoding="utf-8")
+    _config._settings = None
+
+
+@pytest.fixture
+def sftp_server(tmp_path, home, ssh_keys):
+    """A local SFTP server, configured as the private data server.
+
+    It serves ``tmp_path / "server"`` as the SSH user's home; the client key is in
+    ``home/.ssh/test_key`` and saved as the SSH key, and the server's host key is
+    the only trusted one.
+    """
+    host_key, client_key = ssh_keys
+    root = tmp_path / "server"
+    root.mkdir()
+    stub = StubSFTPServer(root, host_key, client_key)
+    key_file = home / ".ssh" / "test_key"
+    key_file.parent.mkdir()
+    client_key.write_private_key_file(str(key_file))
+    write_config(
+        host="127.0.0.1",
+        port=stub.port,
+        host_keys=[f"{host_key.get_name()} {host_key.get_base64()}"],
+        ssh_key=str(key_file),
+    )
+    stub.key_file = key_file
+    yield stub
+    _sftp.close_all()
+    stub.close()
