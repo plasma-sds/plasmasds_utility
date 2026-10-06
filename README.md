@@ -4,8 +4,8 @@ A shared utility package for the plasma-sds synthetic diagnostics (renate, neuro
 Its first job is data access: fetching the data files a package needs from the group's data server when they are not available locally, and uploading data to the server on request.
 
 > **Status:** early development, no release yet.
-> What works so far: choosing where each client's data is stored, and where each data file goes (below).
-> Downloading and uploading come in the next steps.
+> What works so far: choosing where each client's data is stored, where each data file goes, and downloading public data (below).
+> Private data and uploading come in the next steps.
 
 ## Planned scope (first version)
 
@@ -16,6 +16,19 @@ Its first job is data access: fetching the data files a package needs from the g
 - Keep the local data tree a mirror of the server tree.
 
 The design and the decisions that amend it are in [issue #6](https://github.com/plasma-sds/plasmasds_utility/issues/6); progress is tracked on the [project board](https://github.com/orgs/plasma-sds/projects/10).
+
+## Getting data
+
+```python
+from plasmasds_utility import DataClient
+
+data = DataClient("renate-od")
+path = data.get("atomic_data/Na/rates.h5")  # local path; downloaded if missing
+```
+
+For now `get` handles public data only: if the local public copy exists it is returned straight away, without contacting the server; otherwise it is downloaded over HTTPS.
+The download is written to a temporary file and moved into place only when complete, and the local file keeps the server's modification time.
+Private data, and the full order of where `get` looks, come in the next step.
 
 ## Where files go
 
