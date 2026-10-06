@@ -1,4 +1,4 @@
-import re
+from importlib.metadata import version
 
 import pytest
 
@@ -12,8 +12,8 @@ from plasmasds_utility import (
 )
 
 
-def test_version_is_pep440():
-    assert re.fullmatch(r"\d+\.\d+\.\d+(\.dev\d+)?", plasmasds_utility.__version__)
+def test_version_matches_installed_metadata():
+    assert version("plasmasds_utility") == plasmasds_utility.__version__
 
 
 @pytest.mark.parametrize("error", [ConfigError, PathError, TransferError, AuthError])
