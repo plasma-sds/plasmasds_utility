@@ -48,7 +48,11 @@ class DataClient:
                 "'_' and '-', starting with a letter or a digit"
             )
         if prefix.lower() in _RESERVED:
-            raise PathError(f"invalid client prefix {prefix!r}: the name is reserved")
+            raise PathError(
+                f"invalid client prefix {prefix!r}: the utility keeps its own "
+                f"{_config.CONFIG_FILE} and {_config.LOG_FILE} next to the client "
+                "directories (on Windows), so these names are reserved"
+            )
         self.prefix = prefix
         self._working_dir = (
             None if working_dir is None else Path(working_dir).expanduser().absolute()

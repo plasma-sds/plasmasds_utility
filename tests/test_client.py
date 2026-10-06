@@ -34,8 +34,10 @@ def test_prefix_must_be_a_string(prefix):
 
 @pytest.mark.parametrize("prefix", ["config.json", "CONFIG.JSON", "plasmasds.log"])
 def test_reserved_prefixes(prefix):
-    with pytest.raises(PathError, match="reserved"):
+    with pytest.raises(PathError, match="reserved") as error:
         DataClient(prefix)
+    assert "config.json" in str(error.value)
+    assert "plasmasds.log" in str(error.value)
 
 
 def test_construction_reads_and_writes_nothing(home):
