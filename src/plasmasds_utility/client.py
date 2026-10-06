@@ -3,7 +3,7 @@
 import re
 from pathlib import Path
 
-from plasmasds_utility import _config, _paths
+from plasmasds_utility import _config, _paths, _transfer
 from plasmasds_utility.exceptions import PathError
 
 _PREFIX = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
@@ -133,6 +133,45 @@ class DataClient:
         """
         _paths.check_key(key)  # before any I/O
         return _paths.local_path(self.client_dir(), key, private=private)
+
+    def get(self, key):
+        """Return the local path of a data file, downloading it if it is missing.
+
+        For now this handles public data only: it returns the local public copy
+        (``local_path(key, private=False)``) if the file is there, and otherwise
+        downloads it over HTTPS from the public server. Private data, and the full
+        order of where to look, come in the next step.
+
+        A file that is present locally is returned after a single ``stat``, without
+        contacting the server.
+
+        Parameters
+        ----------
+        key : str
+            The data key (see :meth:`local_path`).
+
+        Returns
+        -------
+        pathlib.Path
+            The local file.
+
+        Raises
+        ------
+        PathError
+            If the key is invalid, or something other than a file is in the way.
+        TransferError
+            If the download fails, for example because the file is not on the
+            server.
+        ConfigError
+            As for :meth:`client_dir`.
+        """
+        path = self.local_path(key, private=False)
+        if path.is_file():
+            return path
+        if path.exists():
+            raise PathError(f"cannot store {key!r} at {path}: it is not a file")
+        url = _paths.public_url(_config.settings(), self.prefix, key)
+        return _transfer.download_https(url, path)
 
     def set_working_dir(self, path):
         """Save the working directory for this client in the user configuration.
