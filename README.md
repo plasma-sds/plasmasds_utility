@@ -44,9 +44,9 @@ The first of these that is set wins:
 from plasmasds_utility import DataClient
 
 data = DataClient("renate-od")
-data.client_dir()                       # where renate-od's data is kept
-data.set_working_dir("~/renate-data")   # created if needed, and remembered
-data.set_working_dir(None)              # back to the default
+data.client_dir()  # where renate-od's data is kept
+data.set_working_dir("~/renate-data")  # created if needed, and remembered
+data.set_working_dir(None)  # back to the default
 ```
 
 If a saved working directory is hidden by `PLASMASDS_DATA_DIR` or by an explicit `working_dir`, `set_working_dir` still saves it and logs a warning.
