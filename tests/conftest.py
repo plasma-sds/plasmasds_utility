@@ -77,7 +77,10 @@ def http_server(monkeypatch):
         monkeypatch.delenv(variable, raising=False)
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     server.fake = FakeServer(server.server_address[1])
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    # A short poll interval keeps shutdown() at teardown fast.
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
+    )
     thread.start()
     yield server.fake
     server.shutdown()
