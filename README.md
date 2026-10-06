@@ -60,7 +60,7 @@ The key is the same on the server and locally, so the local tree mirrors the ser
 data.local_path("atomic_data/Na/rates.h5")
 # server:  private_html/renate-od/atomic_data/Na/rates.h5
 # local:   <client directory>/private/atomic_data/Na/rates.h5
-data.local_path("atomic_data/Na/rates.h5", public=True)
+data.local_path("atomic_data/Na/rates.h5", private=False)
 # server:  https://deep.reak.bme.hu/~data/renate-od/atomic_data/Na/rates.h5
 # local:   <client directory>/public/atomic_data/Na/rates.h5
 ```

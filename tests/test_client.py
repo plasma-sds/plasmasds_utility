@@ -253,7 +253,7 @@ def test_local_path_private_by_default():
 
 def test_local_path_public():
     client = DataClient("renate-od")
-    assert client.local_path("a/b.h5", public=True) == (
+    assert client.local_path("a/b.h5", private=False) == (
         client.client_dir() / "public" / "a" / "b.h5"
     )
 

@@ -97,7 +97,7 @@ def check_key(key):
     return parts
 
 
-def local_path(client_dir, key, *, public):
+def local_path(client_dir, key, *, private):
     """Return the local path of a data file.
 
     Parameters
@@ -106,13 +106,13 @@ def local_path(client_dir, key, *, public):
         The client directory.
     key : str
         The data key.
-    public : bool
-        True for the copy of public data, False for private data.
+    private : bool
+        True for the copy of private data, False for public data.
 
     Returns
     -------
     pathlib.Path
-        ``<client_dir>/public/<key>`` or ``<client_dir>/private/<key>``.
+        ``<client_dir>/private/<key>`` or ``<client_dir>/public/<key>``.
 
     Raises
     ------
@@ -120,7 +120,7 @@ def local_path(client_dir, key, *, public):
         If the key is invalid (see :func:`check_key`).
     """
     parts = check_key(key)
-    return client_dir.joinpath("public" if public else "private", *parts)
+    return client_dir.joinpath("private" if private else "public", *parts)
 
 
 def private_remote(settings, prefix, key):

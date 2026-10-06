@@ -73,11 +73,11 @@ def test_keys_must_be_strings(key):
         _paths.check_key(key)
 
 
-@pytest.mark.parametrize("public", [False, True])
+@pytest.mark.parametrize("private", [True, False])
 @pytest.mark.parametrize("key", VALID_KEYS)
-def test_local_path_stays_inside_its_base(home, key, public):
-    base = home / "client" / ("public" if public else "private")
-    path = _paths.local_path(home / "client", key, public=public)
+def test_local_path_stays_inside_its_base(home, key, private):
+    base = home / "client" / ("private" if private else "public")
+    path = _paths.local_path(home / "client", key, private=private)
     assert path.is_relative_to(base)
     assert path != base
 
@@ -85,10 +85,10 @@ def test_local_path_stays_inside_its_base(home, key, public):
 def test_local_path_private_and_public(home):
     client = home / "client"
     key = "atomic_data/Na/rates.h5"
-    assert _paths.local_path(client, key, public=False) == (
+    assert _paths.local_path(client, key, private=True) == (
         client / "private" / "atomic_data" / "Na" / "rates.h5"
     )
-    assert _paths.local_path(client, key, public=True) == (
+    assert _paths.local_path(client, key, private=False) == (
         client / "public" / "atomic_data" / "Na" / "rates.h5"
     )
 
@@ -96,7 +96,7 @@ def test_local_path_private_and_public(home):
 @pytest.mark.parametrize(("key", "reason"), INVALID_KEYS[:4])
 def test_local_path_rejects_invalid_keys(home, key, reason):
     with pytest.raises(PathError, match="invalid data key"):
-        _paths.local_path(home, key, public=False)
+        _paths.local_path(home, key, private=True)
 
 
 SETTINGS = {

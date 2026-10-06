@@ -96,7 +96,7 @@ class DataClient:
             return Path(saved)
         return _config.default_data_dir() / self.prefix
 
-    def local_path(self, key, *, public=False):
+    def local_path(self, key, *, private=True):
         """Return where a data file is, or will be, stored locally.
 
         This neither checks nor creates the file, and never contacts the server.
@@ -107,14 +107,14 @@ class DataClient:
             The path of the file below the client's directory on the server, with
             ``/`` separators on every platform, for example
             ``"atomic_data/Na/rates.h5"``.
-        public : bool, default False
-            True for the local copy of public data, False for private data.
+        private : bool, default True
+            True for the local copy of private data, False for public data.
 
         Returns
         -------
         pathlib.Path
             ``<client_dir>/private/<key>``, or ``<client_dir>/public/<key>`` if
-            ``public`` is true (see :meth:`client_dir`).
+            ``private`` is false (see :meth:`client_dir`).
 
         Raises
         ------
@@ -132,7 +132,7 @@ class DataClient:
         PosixPath('/home/me/.local/share/plasmasds/renate-od/private/Na/rates.h5')
         """
         _paths.check_key(key)  # before any I/O
-        return _paths.local_path(self.client_dir(), key, public=public)
+        return _paths.local_path(self.client_dir(), key, private=private)
 
     def set_working_dir(self, path):
         """Save the working directory for this client in the user configuration.
