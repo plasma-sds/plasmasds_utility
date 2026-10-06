@@ -214,6 +214,38 @@ def test_key_with_a_passphrase_is_not_prompted_for(served, home, sleeps):
     assert sleeps == []
 
 
+def test_key_with_a_passphrase_is_remembered(served, home):
+    locked = home / ".ssh" / "locked_key"
+    paramiko.RSAKey.generate(1024).write_private_key_file(str(locked), password="pw")
+    host_keys = _config.settings()["host_keys"]
+    write_config(
+        host="127.0.0.1", port=served.port, host_keys=host_keys, ssh_key=str(locked)
+    )
+    with pytest.raises(AuthError):
+        download(home / "x.h5")
+    # A usable key now would work, but the failure is remembered for the process.
+    write_config(
+        host="127.0.0.1",
+        port=served.port,
+        host_keys=host_keys,
+        ssh_key=str(served.key_file),
+    )
+    with pytest.raises(AuthError, match="has a passphrase"):
+        download(home / "x.h5")
+
+
+def test_remembered_failure_does_not_grow_its_traceback(served, home):
+    write_config(
+        host="127.0.0.1", port=served.port, host_keys=_config.settings()["host_keys"]
+    )
+    depths = []
+    for _ in range(3):
+        with pytest.raises(AuthError) as error:
+            download(home / "x.h5")
+        depths.append(len(error.traceback))
+    assert depths[1] == depths[2]
+
+
 def test_missing_configured_key_is_a_config_error(served, home):
     write_config(
         host="127.0.0.1",

@@ -11,8 +11,10 @@ Login: the key set with ``set_ssh_key``, the keys in the SSH agent, and the stan
 ``~/.ssh/id_*`` files. The utility never asks for a passphrase.
 
 Failures that retrying cannot fix (a host key mismatch, an unknown host, a rejected or
-missing key) raise :class:`AuthError` and are remembered for the rest of the process,
-so later calls fail at once instead of trying again.
+missing key, a key with a passphrase) raise :class:`AuthError` and are remembered for
+the rest of the process, so later calls fail at once instead of trying again.
+
+One SFTP transfer runs at a time per process; parallel calls take turns.
 """
 
 import atexit
@@ -209,11 +211,15 @@ def download(settings, remote, target, *, timeout=30, attempts=3, backoff=1.0):
     for attempt in range(1, attempts + 1):
         with _lock:
             if server in _unavailable:
-                raise _unavailable[server]
+                # A fresh traceback each time, or the cached one grows per call.
+                raise _unavailable[server].with_traceback(None)
             try:
                 if server not in _sessions:
                     _sessions[server] = _connect(settings, timeout)
                 _fetch(_sessions[server][1], remote, target)
+            except AuthError as error:  # a key with a passphrase, from _load_key
+                _unavailable[server] = error
+                raise
             except (paramiko.SSHException, OSError, EOFError) as error:
                 auth_error = _auth_error(error, settings)
                 if auth_error is not None:
