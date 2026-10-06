@@ -1,0 +1,177 @@
+"""Turn a data key into its local path and its location on the server.
+
+A key is the path of a file below the client's directory, written with ``/`` on every
+platform, for example ``"atomic_data/Na/rates.h5"``. The same key names the file on the
+server and locally, so the local tree mirrors the server.
+
+The key rules are the same on every platform, so a key that works for a Linux user also
+works for a Windows user. Because a valid key has no ``..``, no absolute start and no
+drive, every path built from it stays inside its base directory.
+"""
+
+import re
+from pathlib import PurePosixPath
+from urllib.parse import quote
+
+from plasmasds_utility.exceptions import PathError
+
+# Windows opens these as devices, with or without an extension: writing to them loses
+# the data silently.
+_DEVICE_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{n}" for n in range(1, 10)),
+    *(f"LPT{n}" for n in range(1, 10)),
+}
+# Separators, drive and stream markers, and characters Windows does not allow in names.
+_FORBIDDEN = re.compile(r'[\\:<>"|?*\x00-\x1f]')
+
+
+def _invalid(key, reason):
+    return PathError(f"invalid data key {key!r}: {reason}")
+
+
+def windows_name_problem(name):
+    """Return why Windows would mangle a file or directory name, or None.
+
+    Used for every part of a key and for the client prefix.
+
+    Parameters
+    ----------
+    name : str
+        One path component.
+
+    Returns
+    -------
+    str or None
+        The reason, or None if the name is fine.
+    """
+    if name[-1] in ". ":
+        return f"{name!r} ends in a dot or a space"
+    if name.split(".")[0].upper() in _DEVICE_NAMES:
+        return f"{name!r} is a reserved device name on Windows"
+    return None
+
+
+def check_key(key):
+    r"""Check a data key and split it into its parts.
+
+    Parameters
+    ----------
+    key : str
+        A relative path with ``/`` separators, for example ``"atomic_data/Na/x.h5"``.
+
+    Returns
+    -------
+    tuple of str
+        The parts of the key, for example ``("atomic_data", "Na", "x.h5")``.
+
+    Raises
+    ------
+    PathError
+        If the key is not a string, is empty or absolute, contains ``\ : < > " | ? *``
+        or a control character, or has a part that is empty, ``.``, ``..``, ends in a
+        dot or a space, or is a Windows device name such as ``NUL`` or ``com1.txt``.
+    """
+    if not isinstance(key, str):
+        raise _invalid(
+            key, f"keys are strings with '/' separators, got {type(key).__name__}"
+        )
+    if not key:
+        raise _invalid(key, "the key is empty")
+    match = _FORBIDDEN.search(key)
+    if match:
+        raise _invalid(key, f"{match.group()!r} is not allowed")
+    if key.startswith("/"):
+        raise _invalid(key, "keys are relative; remove the leading '/'")
+    parts = tuple(key.split("/"))
+    for part in parts:
+        if part in ("", ".", ".."):
+            name = "an empty part" if not part else repr(part)
+            raise _invalid(key, f"{name} is not allowed")
+        problem = windows_name_problem(part)
+        if problem:
+            raise _invalid(key, f"part {problem}")
+    return parts
+
+
+def local_path(client_dir, key, *, private):
+    """Return the local path of a data file.
+
+    Parameters
+    ----------
+    client_dir : pathlib.Path
+        The client directory.
+    key : str
+        The data key.
+    private : bool
+        True for the copy of private data, False for public data.
+
+    Returns
+    -------
+    pathlib.Path
+        ``<client_dir>/private/<key>`` or ``<client_dir>/public/<key>``.
+
+    Raises
+    ------
+    PathError
+        If the key is invalid (see :func:`check_key`).
+    """
+    parts = check_key(key)
+    return client_dir.joinpath("private" if private else "public", *parts)
+
+
+def private_remote(settings, prefix, key):
+    """Return the SFTP path of a private data file on the server.
+
+    Parameters
+    ----------
+    settings : dict
+        The merged settings; ``private_root`` is used.
+    prefix : str
+        The client prefix.
+    key : str
+        The data key.
+
+    Returns
+    -------
+    pathlib.PurePosixPath
+        ``<private_root>/<prefix>/<key>``; relative to the SSH user's home unless
+        ``private_root`` is absolute.
+
+    Raises
+    ------
+    PathError
+        If the key is invalid (see :func:`check_key`).
+    """
+    parts = check_key(key)
+    return PurePosixPath(settings["private_root"], prefix, *parts)
+
+
+def public_url(settings, prefix, key):
+    """Return the HTTPS URL of a public data file.
+
+    Parameters
+    ----------
+    settings : dict
+        The merged settings; ``public_url`` is used.
+    prefix : str
+        The client prefix.
+    key : str
+        The data key.
+
+    Returns
+    -------
+    str
+        ``<public_url>/<prefix>/<key>``, with the key percent-encoded as UTF-8 and
+        its ``/`` separators kept.
+
+    Raises
+    ------
+    PathError
+        If the key is invalid (see :func:`check_key`).
+    """
+    check_key(key)
+    return f"{settings['public_url'].rstrip('/')}/{quote(prefix)}/{quote(key)}"

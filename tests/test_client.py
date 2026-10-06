@@ -40,6 +40,22 @@ def test_reserved_prefixes(prefix):
     assert "plasmasds.log" in str(error.value)
 
 
+@pytest.mark.parametrize(
+    ("prefix", "reason"),
+    [
+        ("renate.", "ends in a dot or a space"),
+        ("con", "reserved device name"),
+        ("NUL", "reserved device name"),
+        ("com1.data", "reserved device name"),
+    ],
+)
+def test_prefixes_windows_would_mangle(prefix, reason):
+    with pytest.raises(PathError, match=f"invalid client prefix {prefix!r}"):
+        DataClient(prefix)
+    with pytest.raises(PathError, match=reason):
+        DataClient(prefix)
+
+
 def test_construction_reads_and_writes_nothing(home):
     DataClient("renate-od", working_dir=home / "data")
     assert list(home.iterdir()) == []
@@ -226,3 +242,35 @@ def test_saved_file_has_the_expected_content(home):
     assert json.loads(path.read_text("utf-8")) == {
         "working_dirs": {"renate-od": str(home / "data")}
     }
+
+
+def test_local_path_private_by_default():
+    client = DataClient("renate-od")
+    assert client.local_path("atomic_data/Na/rates.h5") == (
+        client.client_dir() / "private" / "atomic_data" / "Na" / "rates.h5"
+    )
+
+
+def test_local_path_public():
+    client = DataClient("renate-od")
+    assert client.local_path("a/b.h5", private=False) == (
+        client.client_dir() / "public" / "a" / "b.h5"
+    )
+
+
+def test_local_path_follows_the_client_dir(home):
+    client = DataClient("renate-od", working_dir=home / "wd")
+    assert client.local_path("a.h5") == home / "wd" / "private" / "a.h5"
+
+
+def test_local_path_creates_nothing_below_the_client_dir():
+    client = DataClient("renate-od")
+    client.local_path("a/b.h5")
+    assert not client.client_dir().exists()
+
+
+def test_local_path_rejects_an_invalid_key_before_any_io(home):
+    with pytest.raises(PathError, match=r"invalid data key '\.\./x': '\.\.'"):
+        DataClient("renate-od").local_path("../x")
+    assert list(home.iterdir()) == []
+    assert logger.handlers == []

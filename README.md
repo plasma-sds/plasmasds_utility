@@ -4,7 +4,7 @@ A shared utility package for the plasma-sds synthetic diagnostics (renate, neuro
 Its first job is data access: fetching the data files a package needs from the group's data server when they are not available locally, and uploading data to the server on request.
 
 > **Status:** early development, no release yet.
-> What works so far: choosing where each client's data is stored (below).
+> What works so far: choosing where each client's data is stored, and where each data file goes (below).
 > Downloading and uploading come in the next steps.
 
 ## Planned scope (first version)
@@ -50,6 +50,23 @@ data.clear_working_dir()  # back to the default
 ```
 
 If a saved working directory is hidden by `PLASMASDS_DATA_DIR` or by an explicit `working_dir`, `set_working_dir` still saves it and logs a warning.
+
+### Data keys
+
+A data file is named by its *key*: its path below the client's directory on the server, with `/` separators on every platform.
+The key is the same on the server and locally, so the local tree mirrors the server:
+
+```python
+data.local_path("atomic_data/Na/rates.h5")
+# server:  private_html/renate-od/atomic_data/Na/rates.h5
+# local:   <client directory>/private/atomic_data/Na/rates.h5
+data.local_path("atomic_data/Na/rates.h5", private=False)
+# server:  https://deep.reak.bme.hu/~data/renate-od/atomic_data/Na/rates.h5
+# local:   <client directory>/public/atomic_data/Na/rates.h5
+```
+
+A key must be relative and may not contain `..`, `.`, empty parts, the characters `\ : < > " | ? *` or control characters, parts ending in a dot or a space, or Windows device names such as `NUL` or `com1.txt`.
+The rules are the same on every platform, so a key that works on Linux also works on Windows; an invalid key raises `PathError` naming the part that is wrong.
 
 ### The configuration file
 

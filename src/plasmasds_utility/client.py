@@ -3,7 +3,7 @@
 import re
 from pathlib import Path
 
-from plasmasds_utility import _config
+from plasmasds_utility import _config, _paths
 from plasmasds_utility.exceptions import PathError
 
 _PREFIX = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
@@ -24,6 +24,8 @@ class DataClient:
         It may contain ASCII letters, digits, ``.``, ``_`` and ``-``, and must start
         with a letter or a digit. ``config.json`` and ``plasmasds.log`` are reserved,
         because on Windows those files share a directory with the client directories.
+        As for data keys, it may not end in a dot or be a Windows device name such as
+        ``nul``.
     working_dir : str or os.PathLike, optional
         A directory to use for this client's data, for this object only; it takes
         precedence over every other setting (see :meth:`client_dir`).
@@ -53,6 +55,9 @@ class DataClient:
                 f"{_config.CONFIG_FILE} and {_config.LOG_FILE} next to the client "
                 "directories (on Windows), so these names are reserved"
             )
+        problem = _paths.windows_name_problem(prefix)
+        if problem:
+            raise PathError(f"invalid client prefix {prefix!r}: {problem}")
         self.prefix = prefix
         self._working_dir = (
             None if working_dir is None else Path(working_dir).expanduser().absolute()
@@ -90,6 +95,44 @@ class DataClient:
         if saved is not None:
             return Path(saved)
         return _config.default_data_dir() / self.prefix
+
+    def local_path(self, key, *, private=True):
+        """Return where a data file is, or will be, stored locally.
+
+        This neither checks nor creates the file, and never contacts the server.
+
+        Parameters
+        ----------
+        key : str
+            The path of the file below the client's directory on the server, with
+            ``/`` separators on every platform, for example
+            ``"atomic_data/Na/rates.h5"``.
+        private : bool, default True
+            True for the local copy of private data, False for public data.
+
+        Returns
+        -------
+        pathlib.Path
+            ``<client_dir>/private/<key>``, or ``<client_dir>/public/<key>`` if
+            ``private`` is false (see :meth:`client_dir`).
+
+        Raises
+        ------
+        PathError
+            If the key is not a valid relative path; the message names the key and
+            the part that is wrong.
+        ConfigError
+            As for :meth:`client_dir`.
+
+        Examples
+        --------
+        On Linux, with the default client directory:
+
+        >>> DataClient("renate-od").local_path("Na/rates.h5")  # doctest: +SKIP
+        PosixPath('/home/me/.local/share/plasmasds/renate-od/private/Na/rates.h5')
+        """
+        _paths.check_key(key)  # before any I/O
+        return _paths.local_path(self.client_dir(), key, private=private)
 
     def set_working_dir(self, path):
         """Save the working directory for this client in the user configuration.
