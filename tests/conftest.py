@@ -1,3 +1,12 @@
+"""Fixtures shared by all tests.
+
+pytest loads a file named exactly ``conftest.py`` automatically and makes its fixtures
+available to every test in this folder, so this file must keep its name.
+
+The ``home`` fixture is ``autouse``: it runs for every test, even those that do not ask
+for it, and keeps the whole suite away from the real home, config and log folders.
+"""
+
 import pytest
 
 from plasmasds_utility import _config
