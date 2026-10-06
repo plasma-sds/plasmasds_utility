@@ -43,3 +43,44 @@ convention = "numpy"
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["D"]
+
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["linux-64", "win-64"]
+
+[tool.pixi.dependencies]
+python = ">=3.11"
+
+[tool.pixi.pypi-dependencies]
+plasmasds_utility = { path = ".", editable = true }
+
+[tool.pixi.feature.test.dependencies]
+pytest = ">=8"
+
+[tool.pixi.feature.test.tasks]
+test = "pytest"
+
+[tool.pixi.feature.lint.dependencies]
+ruff = ">=0.15"
+
+[tool.pixi.feature.lint.tasks]
+lint = "ruff check . && ruff format --check ."
+
+[tool.pixi.feature.py311.dependencies]
+python = "3.11.*"
+
+[tool.pixi.feature.py312.dependencies]
+python = "3.12.*"
+
+[tool.pixi.feature.py313.dependencies]
+python = "3.13.*"
+
+[tool.pixi.feature.py314.dependencies]
+python = "3.14.*"
+
+[tool.pixi.environments]
+default = ["test", "lint"]
+py311 = ["py311", "test"]
+py312 = ["py312", "test"]
+py313 = ["py313", "test"]
+py314 = ["py314", "test"]
