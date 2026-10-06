@@ -76,20 +76,6 @@ def test_unknown_key_is_ignored_with_a_warning(config_file, caplog):
     assert str(config_file) in caplog.text
 
 
-def test_underscore_keys_are_comments(config_file, caplog):
-    write_json(config_file, {"_comment": "my notes", "_port": "not checked"})
-    with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
-        settings = _config.settings()
-    assert settings == _config._defaults()
-    assert caplog.records == []
-
-
-def test_saving_keeps_comment_keys(config_file, home):
-    write_json(config_file, {"_comment": "my notes"})
-    _config.save_working_dir("renate-od", str(home / "data"))
-    assert json.loads(config_file.read_text("utf-8"))["_comment"] == "my notes"
-
-
 @pytest.mark.parametrize(
     ("key", "value"),
     [

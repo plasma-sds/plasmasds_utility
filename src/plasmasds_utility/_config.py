@@ -124,10 +124,9 @@ def env_data_dir():
 
 
 def _defaults():
-    """Return the packaged defaults as a dict, without the ``_`` comment keys."""
+    """Return the packaged defaults as a dict."""
     text = resources.files("plasmasds_utility").joinpath("data", "defaults.json")
-    data = json.loads(text.read_text(encoding="utf-8"))
-    return {key: value for key, value in data.items() if not key.startswith("_")}
+    return json.loads(text.read_text(encoding="utf-8"))
 
 
 def _read_user(path):
@@ -165,8 +164,6 @@ def _merge(defaults, user, path):
     in two environments may share one ``config.json`` while running different versions,
     and a key added by the newer version must not break the older one.
     A known key with a value of the wrong type is an error.
-    Keys starting with ``_`` are skipped silently; JSON has no comments, so such keys
-    can hold them.
 
     Raises
     ------
@@ -175,8 +172,6 @@ def _merge(defaults, user, path):
     """
     merged = dict(defaults)
     for key, value in user.items():
-        if key.startswith("_"):
-            continue
         if key not in defaults:
             logger.warning(
                 "%s: ignoring unknown setting %r (from a newer plasmasds_utility?)",
