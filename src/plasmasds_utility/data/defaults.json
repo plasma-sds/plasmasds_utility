@@ -1,16 +1,4 @@
 {
-  "_comments": {
-    "about": "Packaged defaults; read-only. Override a setting by putting the same key, with a value of the same type, in the user's config.json (see the README). Keys starting with _ are comments.",
-    "paths": "<prefix> is the client's directory on the server (e.g. renate-od); <key> is the relative path of a file below it. The same <prefix>/<key> is used on every route, so the local tree mirrors the server.",
-    "host": "Data server, for SSH and HTTPS.",
-    "port": "SSH port of the data server.",
-    "user": "SSH user. Relative roots below are resolved by SFTP from this user's home directory (/home/data).",
-    "private_root": "SFTP only (downloads and uploads of private data): <private_root>/<prefix>/<key>, e.g. private_html/renate-od/<key> = /home/data/private_html/renate-od/<key>. Never served over HTTP.",
-    "public_root": "SFTP only (uploads of public data): <public_root>/<prefix>/<key>, e.g. public_html/renate-od/<key>. This is the folder Apache serves at public_url, so public downloads go over HTTPS instead.",
-    "public_url": "HTTPS only (downloads of public data, no key needed): <public_url>/<prefix>/<key>, e.g. https://deep.reak.bme.hu/~data/renate-od/<key>. Apache maps ~data to /home/data/public_html, so these are the same files as public_root.",
-    "host_keys": "SSH host keys trusted for host:port, in OpenSSH format, in addition to the user's own known_hosts; any other host key is rejected. ED25519 key verified on the server on 2026-10-06 (SHA256:usX2dUJQMwMew4aipu0soHO1cVN62JtI2L6uYT1oI7o).",
-    "working_dirs": "Always empty here. In config.json it maps a client prefix to its saved working directory (an absolute path), as set by DataClient.set_working_dir."
-  },
   "host": "deep.reak.bme.hu",
   "port": 72,
   "user": "data",

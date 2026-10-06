@@ -37,12 +37,6 @@ def test_defaults_have_the_expected_keys_and_types():
     assert defaults["working_dirs"] == {}
 
 
-def test_every_setting_is_explained_in_the_comments():
-    path = _config.resources.files("plasmasds_utility") / "data" / "defaults.json"
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    assert set(_config._defaults()) <= set(raw["_comments"])
-
-
 def test_public_url_uses_https():
     assert _config._defaults()["public_url"].startswith("https://")
 
