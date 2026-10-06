@@ -19,7 +19,7 @@ import paramiko
 import pytest
 from _sftp_server import StubSFTPServer
 
-from plasmasds_utility import _config, _sftp
+from plasmasds_utility import _config, _sftp, client
 
 
 class FakeServer:
@@ -111,6 +111,7 @@ def home(tmp_path, monkeypatch):
     for variable in ENV_VARIABLES:
         monkeypatch.delenv(variable, raising=False)
     monkeypatch.setattr(_config, "_settings", None)
+    monkeypatch.setattr(client, "_public_warned", set())
     yield home
     _sftp.close_all()
     # Close the log file, or Windows cannot delete the temporary directory.

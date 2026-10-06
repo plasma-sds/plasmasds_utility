@@ -3,12 +3,23 @@
 import re
 from pathlib import Path
 
-from plasmasds_utility import _config, _https, _paths
-from plasmasds_utility.exceptions import PathError
+from plasmasds_utility import _config, _https, _paths, _sftp
+from plasmasds_utility.exceptions import AuthError, PathError, TransferError
 
 _PREFIX = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 # On Windows these files share a directory with the client directories.
 _RESERVED = {_config.CONFIG_FILE, _config.LOG_FILE}
+# (prefix, key) pairs already warned about using their public copy.
+_public_warned = set()
+
+
+def _present(path, key):
+    """Return whether path is a file; raise PathError if something else is there."""
+    if path.is_file():
+        return True
+    if path.exists():
+        raise PathError(f"cannot store {key!r} at {path}: it is not a file")
+    return False
 
 
 class DataClient:
@@ -137,13 +148,23 @@ class DataClient:
     def get(self, key):
         """Return the local path of a data file, downloading it if it is missing.
 
-        For now this handles public data only: it returns the local public copy
-        (``local_path(key, private=False)``) if the file is there, and otherwise
-        downloads it over HTTPS from the public server. Private data, and the full
-        order of where to look, come in the next step.
+        Looks in this order and returns the first file found:
 
-        A file that is present locally is returned after a single ``stat``, without
-        contacting the server.
+        1. the local private copy;
+        2. the private server, over SFTP, downloading into the private copy;
+        3. the local public copy;
+        4. the public server, over HTTPS, downloading into the public copy.
+
+        Step 2 is skipped when private data is not available to you (no SSH key,
+        key rejected, unknown or mismatching host key), which is remembered for
+        the rest of the process, or when the file is not on the private server.
+        Any other failure of the private server, such as a timeout, raises
+        :class:`TransferError` instead, so public data never silently replaces
+        private data. Returning public data logs a warning, once per key and
+        process.
+
+        A local copy is returned after a single ``stat``, without contacting a
+        server.
 
         Parameters
         ----------
@@ -160,18 +181,37 @@ class DataClient:
         PathError
             If the key is invalid, or something other than a file is in the way.
         TransferError
-            If the download fails, for example because the file is not on the
-            server.
+            If the private server fails for a reason other than those above, or the
+            file is on neither server.
         ConfigError
-            As for :meth:`client_dir`.
+            As for :meth:`client_dir`, or if the configured SSH key is missing or
+            unreadable.
         """
-        path = self.local_path(key, private=False)
-        if path.is_file():
-            return path
-        if path.exists():
-            raise PathError(f"cannot store {key!r} at {path}: it is not a file")
-        url = _paths.public_url(_config.settings(), self.prefix, key)
-        return _https.download(url, path)
+        private = self.local_path(key, private=True)
+        if _present(private, key):
+            return private
+        settings = _config.settings()
+        remote = _paths.private_remote(settings, self.prefix, key)
+        try:
+            return _sftp.download(settings, remote, private)
+        except (AuthError, _sftp.NotOnServer) as error:
+            reason = error
+        public = self.local_path(key, private=False)
+        if not _present(public, key):
+            url = _paths.public_url(settings, self.prefix, key)
+            try:
+                _https.download(url, public)
+            except TransferError as error:
+                raise TransferError(
+                    f"cannot get {key!r}: not from the private server ({reason}), "
+                    f"and not from the public server ({error})"
+                ) from error
+        if (self.prefix, key) not in _public_warned:
+            _public_warned.add((self.prefix, key))
+            _config.logger.warning(
+                "using the public copy of %r (%s): %s", key, reason, public
+            )
+        return public
 
     def set_working_dir(self, path):
         """Save the working directory for this client in the user configuration.

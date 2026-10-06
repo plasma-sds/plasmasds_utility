@@ -4,16 +4,20 @@ import logging
 import os
 import subprocess
 import sys
+import types
 
 import pytest
+from conftest import write_config
 
 import plasmasds_utility
 from plasmasds_utility import (
+    AuthError,
     ConfigError,
     DataClient,
     PathError,
     TransferError,
     _config,
+    _sftp,
 )
 
 logger = logging.getLogger("plasmasds_utility")
@@ -285,10 +289,13 @@ def test_local_path_rejects_an_invalid_key_before_any_io(home):
 
 @pytest.fixture
 def public_server(http_server):
-    """The local HTTP server, configured as the public data server."""
-    path = _config.config_dir() / _config.CONFIG_FILE
-    path.parent.mkdir(parents=True)
-    path.write_text(json.dumps({"public_url": http_server.url("/~data")}), "utf-8")
+    """The local HTTP server as the public data server; no private access.
+
+    The private server is marked unavailable, as for a user without an SSH key,
+    so no SSH connection is attempted.
+    """
+    write_config(host="127.0.0.1", port=9, public_url=http_server.url("/~data"))
+    _sftp._unavailable[("127.0.0.1", 9, "data")] = AuthError("no key in this test")
     return http_server
 
 
@@ -385,3 +392,135 @@ def test_set_ssh_key_logs_the_change(key_file):
     plasmasds_utility.set_ssh_key(key_file)
     text = (_config.log_dir() / _config.LOG_FILE).read_text("utf-8")
     assert f"SSH key set to {key_file}" in text
+
+
+class Servers:
+    """The local SFTP and HTTP servers as the private and public data servers."""
+
+    def __init__(self, sftp, http, root):
+        self.sftp = sftp
+        self.http = http
+        self.root = root
+
+    def put_private(self, key, body=b"private"):
+        path = self.root.joinpath("private_html", "renate-od", *key.split("/"))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(body)
+
+    def put_public(self, key, body=b"public"):
+        self.http.serve(f"/~data/renate-od/{key}", {"body": body})
+
+    def public_requests(self):
+        return sum(self.http.requests.values())
+
+
+@pytest.fixture
+def servers(sftp_server, http_server, tmp_path):
+    settings = _config.settings()
+    write_config(
+        host="127.0.0.1",
+        port=sftp_server.port,
+        host_keys=settings["host_keys"],
+        ssh_key=settings["ssh_key"],
+        public_url=http_server.url("/~data"),
+    )
+    return Servers(sftp_server, http_server, tmp_path / "server")
+
+
+def place(path, body):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(body)
+
+
+def test_get_returns_the_local_private_copy_without_any_server(servers):
+    client = DataClient("renate-od")
+    place(client.local_path("a.h5"), b"mine")
+    assert client.get("a.h5").read_bytes() == b"mine"
+    assert servers.sftp.connections == 0
+    assert servers.public_requests() == 0
+
+
+def test_get_downloads_private_data_first(servers):
+    servers.put_private("a/b.h5", b"real")
+    servers.put_public("a/b.h5", b"dummy")
+    client = DataClient("renate-od")
+    path = client.get("a/b.h5")
+    assert path == client.local_path("a/b.h5", private=True)
+    assert path.read_bytes() == b"real"
+    assert servers.public_requests() == 0
+
+
+def test_a_local_public_copy_does_not_block_a_private_download(servers):
+    servers.put_private("a.h5", b"real")
+    client = DataClient("renate-od")
+    place(client.local_path("a.h5", private=False), b"dummy")
+    assert client.get("a.h5").read_bytes() == b"real"
+
+
+def test_get_falls_back_to_the_local_public_copy(servers, caplog):
+    client = DataClient("renate-od")
+    place(client.local_path("a.h5", private=False), b"dummy")
+    with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
+        path = client.get("a.h5")
+    assert path == client.local_path("a.h5", private=False)
+    assert "using the public copy of 'a.h5'" in caplog.text
+    assert "is not on the private server" in caplog.text
+    assert servers.public_requests() == 0
+
+
+def test_get_falls_back_to_a_public_download(servers):
+    servers.put_public("a.h5", b"dummy")
+    client = DataClient("renate-od")
+    assert client.get("a.h5").read_bytes() == b"dummy"
+    assert servers.public_requests() == 1
+
+
+def test_public_warning_is_given_once_per_key(servers, caplog):
+    servers.put_public("a.h5")
+    client = DataClient("renate-od")
+    with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
+        client.get("a.h5")
+        client.get("a.h5")
+    assert caplog.text.count("using the public copy of 'a.h5'") == 1
+
+
+def test_without_a_key_public_data_is_used_and_ssh_not_retried(servers, caplog):
+    write_config(
+        host="127.0.0.1",
+        port=servers.sftp.port,
+        host_keys=_config.settings()["host_keys"],
+        public_url=servers.http.url("/~data"),
+    )
+    servers.put_private("a.h5")
+    servers.put_public("a.h5", b"dummy")
+    servers.put_public("b.h5", b"dummy")
+    client = DataClient("renate-od")
+    with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
+        assert client.get("a.h5").read_bytes() == b"dummy"
+        assert client.get("b.h5").read_bytes() == b"dummy"
+    assert servers.sftp.connections == 1  # the failure is remembered
+    assert "no SSH key found" in caplog.text
+
+
+def test_private_server_failure_is_not_hidden_by_public_data(servers, monkeypatch):
+    monkeypatch.setattr(_sftp, "time", types.SimpleNamespace(sleep=lambda s: None))
+    servers.sftp.fail_connections = 3
+    servers.put_public("a.h5", b"dummy")
+    with pytest.raises(TransferError, match="after 3 attempts"):
+        DataClient("renate-od").get("a.h5")
+    assert servers.public_requests() == 0
+
+
+def test_get_reports_a_file_on_neither_server(servers):
+    with pytest.raises(TransferError, match="cannot get 'a.h5'") as error:
+        DataClient("renate-od").get("a.h5")
+    assert "not on the private server" in str(error.value)
+    assert "not on the public server" in str(error.value)
+
+
+def test_get_refuses_a_directory_in_the_private_copy(servers):
+    client = DataClient("renate-od")
+    client.local_path("a.h5").mkdir(parents=True)
+    with pytest.raises(PathError, match="it is not a file"):
+        client.get("a.h5")
+    assert servers.sftp.connections == 0

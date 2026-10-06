@@ -25,6 +25,11 @@ from paramiko.hostkeys import HostKeyEntry, InvalidHostKey
 from plasmasds_utility import _config, _files
 from plasmasds_utility.exceptions import AuthError, ConfigError, TransferError
 
+
+class NotOnServer(TransferError):
+    """The file is not on the private server (a TransferError that is not retried)."""
+
+
 _lock = threading.Lock()
 _sessions = {}  # (host, port, user) -> (SSHClient, SFTPClient)
 _unavailable = {}  # (host, port, user) -> AuthError
@@ -240,7 +245,7 @@ def _fetch(sftp, remote, target):
     try:
         attributes = sftp.stat(str(remote))
     except FileNotFoundError as error:
-        raise TransferError(f"{remote} is not on the private server") from error
+        raise NotOnServer(f"{remote} is not on the private server") from error
     except PermissionError as error:
         raise TransferError(
             f"access to {remote} is denied on the private server"
