@@ -25,7 +25,8 @@ Decisions already made (do not re-open them without an owner):
   A client may set its own working directory, which overrides the utility's default.
   The local tree mirrors the server tree.
 - Packaged defaults are read-only.
-  On first use they are copied as JSON into a per-user directory, and that copy is the only configuration file the utility writes.
+  They are read on every use, with a per-user JSON file applied on top that holds only the user's overrides; that file is the only configuration file the utility writes.
+  (Overrides only, rather than a full copy, so that changed defaults reach existing users; decided 2026-10-06 on #6.)
   Nothing is ever written under `site-packages`.
 - Data is downloaded only when it is missing locally.
   By default the server is not checked if non-dummy data is present; the first use in a session prints a notice saying so, together with the command that checks for new data.

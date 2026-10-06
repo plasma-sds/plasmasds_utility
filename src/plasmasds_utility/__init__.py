@@ -3,6 +3,7 @@
 The package is under development; see issue #6 for the design.
 """
 
+from plasmasds_utility.client import DataClient
 from plasmasds_utility.exceptions import (
     AuthError,
     ConfigError,
@@ -16,6 +17,7 @@ __version__ = "0.1.0.dev0"
 __all__ = [
     "AuthError",
     "ConfigError",
+    "DataClient",
     "PathError",
     "PlasmasdsUtilityError",
     "TransferError",
