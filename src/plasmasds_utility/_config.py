@@ -19,8 +19,9 @@ An ``XDG_*`` variable that is empty or not an absolute path is ignored, as the X
 specification requires; so is an empty or relative ``LOCALAPPDATA``, which falls back to
 ``~/AppData/Local``.
 
-Settings come from the packaged ``data/defaults.json``, read on every new process, with
-the user's ``config.json`` in :func:`config_dir` applied on top, key by key.
+Settings come from the packaged ``data/defaults.toml`` (TOML, so it can carry comments
+explaining each setting), read on every new process, with the user's ``config.json`` in
+:func:`config_dir` applied on top, key by key.
 The user file holds only what the user changed, so a release that changes a default
 (host, port, server roots, host key) reaches every user who has not overridden it.
 The packaged ``working_dirs`` is always empty; it is there so that the user's
@@ -32,6 +33,7 @@ import json
 import logging
 import os
 import tempfile
+import tomllib
 from importlib import resources
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -125,8 +127,8 @@ def env_data_dir():
 
 def _defaults():
     """Return the packaged defaults as a dict."""
-    text = resources.files("plasmasds_utility").joinpath("data", "defaults.json")
-    return json.loads(text.read_text(encoding="utf-8"))
+    text = resources.files("plasmasds_utility").joinpath("data", "defaults.toml")
+    return tomllib.loads(text.read_text(encoding="utf-8"))
 
 
 def _read_user(path):

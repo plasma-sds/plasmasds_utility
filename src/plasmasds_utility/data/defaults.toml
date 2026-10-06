@@ -1,0 +1,46 @@
+# Packaged defaults of plasmasds_utility; read-only.
+#
+# Override a setting by putting the same key, with a value of the same type, in the
+# user's config.json (see the README); everything else is taken from this file.
+#
+# Server paths: <prefix> is the client's directory on the server (for example
+# renate-od) and <key> is the relative path of a file below it. The same
+# <prefix>/<key> is used on every route, so the local tree mirrors the server.
+
+# Data server, for SSH and HTTPS.
+host = "deep.reak.bme.hu"
+
+# SSH port of the data server.
+port = 72
+
+# SSH user. SFTP resolves the relative roots below from its home, /home/data.
+user = "data"
+
+# SFTP only, for downloads and uploads of private data:
+#   <private_root>/<prefix>/<key>
+#   e.g. private_html/renate-od/<key> = /home/data/private_html/renate-od/<key>
+# Never served over HTTP.
+private_root = "private_html"
+
+# SFTP only, for uploads of public data:
+#   <public_root>/<prefix>/<key>
+#   e.g. public_html/renate-od/<key> = /home/data/public_html/renate-od/<key>
+# Apache serves this folder at public_url, so public downloads use HTTPS instead.
+public_root = "public_html"
+
+# HTTPS only, for downloads of public data; no SSH key needed:
+#   <public_url>/<prefix>/<key>
+#   e.g. https://deep.reak.bme.hu/~data/renate-od/<key>
+# Apache maps ~data to /home/data/public_html: the same files as public_root.
+public_url = "https://deep.reak.bme.hu/~data"
+
+# SSH host keys trusted for host:port, in OpenSSH format, in addition to the user's
+# own known_hosts; any other host key is rejected. The ED25519 key was verified on
+# the server on 2026-10-06 (SHA256:usX2dUJQMwMew4aipu0soHO1cVN62JtI2L6uYT1oI7o).
+host_keys = [
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKFX6Lc5FaHHrGq7Xp+czQ8mkjyATaCqfudo7P/IEAPj",
+]
+
+# Always empty here. In config.json it maps a client prefix to its saved working
+# directory (an absolute path), as set by DataClient.set_working_dir.
+working_dirs = {}

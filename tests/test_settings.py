@@ -37,6 +37,14 @@ def test_defaults_have_the_expected_keys_and_types():
     assert defaults["working_dirs"] == {}
 
 
+def test_every_setting_has_a_comment_above_it():
+    path = _config.resources.files("plasmasds_utility") / "data" / "defaults.toml"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    for key in _config._defaults():
+        (index,) = [i for i, line in enumerate(lines) if line.startswith(f"{key} =")]
+        assert lines[index - 1].startswith("#"), f"{key} has no comment"
+
+
 def test_public_url_uses_https():
     assert _config._defaults()["public_url"].startswith("https://")
 

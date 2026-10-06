@@ -66,6 +66,7 @@ You can also edit it by hand:
 ```
 
 The other settings it may override are `host`, `port`, `user`, `private_root`, `public_root`, `public_url` and `host_keys`; a value must have the same type as the default.
+What each one means, and how server paths are built from them, is explained in the packaged [`defaults.toml`](src/plasmasds_utility/data/defaults.toml).
 An invalid value stops the utility with a `ConfigError` that names the file and the setting.
 An unknown setting is ignored with a warning, so a file written by a newer version still works with an older one.
 
