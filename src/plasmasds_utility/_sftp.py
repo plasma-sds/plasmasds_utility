@@ -74,12 +74,20 @@ def _load_key(path):
         if "encrypted" not in str(error) and not isinstance(
             error, paramiko.PasswordRequiredException
         ):
-            raise
+            raise ConfigError(
+                f"cannot read {path} as an SSH private key: {error}"
+            ) from error
         _config.logger.info(
             "the SSH key %s has a passphrase; using the SSH agent for it", path
         )
         return None, True
-    except (ValueError, paramiko.SSHException, OSError) as error:
+    except (
+        ValueError,
+        paramiko.SSHException,
+        paramiko.UnknownKeyType,
+        OSError,
+    ) as error:
+        # UnknownKeyType: a key type paramiko does not support, such as DSA.
         raise ConfigError(
             f"cannot read {path} as an SSH private key: {error}"
         ) from error

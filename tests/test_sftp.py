@@ -351,6 +351,23 @@ def test_invalid_host_key_setting_is_a_config_error(served, home, line):
         download(home / "x.h5")
 
 
+@pytest.mark.parametrize(
+    "error",
+    [
+        paramiko.UnknownKeyType(key_type="ssh-dss", key_bytes=b""),
+        TypeError("unexpected"),
+    ],
+)
+def test_unsupported_key_is_a_config_error(served, home, monkeypatch, error):
+    def fail(path, password=None):
+        raise error
+
+    monkeypatch.setattr(paramiko.PKey, "from_path", fail)
+    with pytest.raises(ConfigError, match="cannot read .* as an SSH private key"):
+        download(home / "x.h5")
+    assert served.connections == 0
+
+
 def test_unreadable_key_file_is_a_config_error(served, home):
     bad = home / ".ssh" / "bad_key"
     bad.write_text("garbage", encoding="utf-8")
