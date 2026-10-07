@@ -34,12 +34,19 @@ public_root = "public_html"
 # Apache maps ~data to /home/data/public_html: the same files as public_root.
 public_url = "https://deep.reak.bme.hu/~data"
 
-# SSH host keys trusted for host:port, in OpenSSH format, in addition to the user's
-# own known_hosts; any other host key is rejected. The ED25519 key was verified on
-# the server on 2026-10-06 (SHA256:usX2dUJQMwMew4aipu0soHO1cVN62JtI2L6uYT1oI7o).
+# SSH host keys trusted for host:port, in OpenSSH format. The user's own
+# ~/.ssh/known_hosts is checked first; these keys are used when it has no entry for
+# the server. Any other host key is rejected. The ED25519 key was verified on the
+# server on 2026-10-06 (SHA256:usX2dUJQMwMew4aipu0soHO1cVN62JtI2L6uYT1oI7o).
 host_keys = [
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKFX6Lc5FaHHrGq7Xp+czQ8mkjyATaCqfudo7P/IEAPj",
 ]
+
+# Private SSH key for the private data, as an absolute path. Empty: use the keys in
+# the SSH agent and the standard ~/.ssh/id_* files. Set it with
+# plasmasds_utility.set_ssh_key(path); a key with a passphrase must be in the agent,
+# because the utility never asks for a passphrase.
+ssh_key = ""
 
 # Always empty here. In config.json it maps a client prefix to its saved working
 # directory (an absolute path), as set by DataClient.set_working_dir.

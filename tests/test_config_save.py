@@ -120,3 +120,25 @@ def test_unwritable_location_is_a_config_error(home, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(blocker))
     with pytest.raises(ConfigError):
         _config.save_working_dir("renate-od", str(home / "data"))
+
+
+def test_save_ssh_key_keeps_other_entries(config_file, home):
+    _config.save_working_dir("renate-od", str(home / "data"))
+    _config.save_ssh_key(str(home / "id_test"))
+    assert read_json(config_file) == {
+        "ssh_key": str(home / "id_test"),
+        "working_dirs": {"renate-od": str(home / "data")},
+    }
+    assert _config.settings()["ssh_key"] == str(home / "id_test")
+
+
+def test_clear_ssh_key(config_file, home):
+    _config.save_ssh_key(str(home / "id_test"))
+    _config.save_ssh_key(None)
+    assert read_json(config_file) == {}
+    assert _config.settings()["ssh_key"] == ""
+
+
+def test_clear_ssh_key_without_a_file_creates_none(config_file):
+    _config.save_ssh_key(None)
+    assert not config_file.exists()

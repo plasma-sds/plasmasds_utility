@@ -5,7 +5,7 @@ import types
 
 import pytest
 
-from plasmasds_utility import PathError, TransferError, _https
+from plasmasds_utility import PathError, TransferError, _files, _https
 
 LAST_MODIFIED = "Fri, 23 Feb 2018 21:48:01 GMT"
 TIMESTAMP = 1519422481
@@ -169,7 +169,7 @@ def test_failing_utime_keeps_the_download(
     def refuse(*args, **kwargs):
         raise PermissionError("not allowed here")
 
-    monkeypatch.setattr(_https.os, "utime", refuse)
+    monkeypatch.setattr(_files.os, "utime", refuse)
     target = home / "a.txt"
     with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
         _https.download(http_server.url("/a.txt"), target)
@@ -194,7 +194,26 @@ def test_unencrypted_url_logs_a_warning(http_server, home, caplog):
     assert "unencrypted connection" in caplog.text
 
 
+def test_local_write_failure_is_a_path_error_not_retried(
+    http_server, home, sleeps, monkeypatch
+):
+    http_server.serve("/a.txt", {"body": b"x"})
+
+    def refuse(*args, **kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(_files.tempfile, "mkstemp", refuse)
+    with pytest.raises(PathError, match="No space left on device"):
+        _https.download(http_server.url("/a.txt"), home / "a.txt")
+    assert sleeps == []
+
+
 def test_unusable_target_directory_is_a_path_error(home):
     (home / "file").write_text("x", encoding="utf-8")
     with pytest.raises(PathError, match="cannot create the directory"):
         _https.download("https://example.invalid/a", home / "file" / "a")
+
+
+def test_attempts_must_be_positive(home):
+    with pytest.raises(ValueError, match="attempts must be at least 1"):
+        _https.download("https://example.invalid/a", home / "a", attempts=0)

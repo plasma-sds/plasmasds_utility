@@ -4,8 +4,8 @@ A shared utility package for the plasma-sds synthetic diagnostics (renate, neuro
 Its first job is data access: fetching the data files a package needs from the group's data server when they are not available locally, and uploading data to the server on request.
 
 > **Status:** early development, no release yet.
-> What works so far: choosing where each client's data is stored, where each data file goes, and downloading public data (below).
-> Private data and uploading come in the next steps.
+> What works so far: choosing where each client's data is stored, where each data file goes, and downloading private and public data (below).
+> Checking the server for newer data and uploading come in the next steps.
 
 ## Planned scope (first version)
 
@@ -26,9 +26,50 @@ data = DataClient("renate-od")
 path = data.get("atomic_data/Na/rates.h5")  # local path; downloaded if missing
 ```
 
-For now `get` handles public data only, even if a private copy is present: if the local public copy exists it is returned straight away, without contacting the server; otherwise it is downloaded over HTTPS.
-The download is written to a temporary file and moved into place only when complete, and the local file keeps the server's modification time.
-Private data, and the full order of where `get` looks, come in the next step.
+`get` returns the first of these it finds:
+
+1. the local private copy;
+2. the file on the private server, downloaded over SFTP (needs an SSH key);
+3. the local public copy;
+4. the file on the public server, downloaded over HTTPS.
+
+A local private copy is returned straight away, without contacting a server.
+A local public copy is returned once the private server has been asked for the file, at most once per file and session, because private data comes first; `private=False` skips that (for example offline).
+Downloads are written to a temporary file and moved into place only when complete, and the local file keeps the server's modification time.
+
+To choose the source, pass `private`:
+
+```python
+data.get(key)  # best available: private if you have access, else public
+data.get(key, private=True)  # private only: raises instead of using public data
+data.get(key, private=False)  # public only: never contacts the private server
+```
+
+With the default, private data gives way to public data only when you have no access to it (no key, key rejected, a host key that is unknown or does not match; remembered for the session) or the file is not on the private server.
+Any other failure, such as a timeout, is raised, so public data never silently replaces private data.
+Such fallbacks are announced: the first one in a session with a warning, every one in the log file, and all of them in a summary when the program ends.
+To list them at any time, for example at the end of a notebook:
+
+```python
+plasmasds_utility.show_public_fallbacks()
+```
+
+### Private data
+
+Private data needs an SSH key that the data server accepts.
+The utility uses the key saved with `set_ssh_key`, the keys in your SSH agent, and the standard `~/.ssh/id_*` files:
+
+```python
+import plasmasds_utility
+
+plasmasds_utility.set_ssh_key("~/.ssh/plasmasds_deep")  # saved for every client
+plasmasds_utility.set_ssh_key(None)  # back to the agent and ~/.ssh/id_*
+```
+
+It never asks for a passphrase: load a key with a passphrase into the SSH agent (`ssh-add`); a saved key that has one is then used through the agent.
+A failed login is remembered for the session, so after fixing it (for example with `ssh-add`), restart Python (or the Python kernel).
+The server's host key is checked against your `~/.ssh/known_hosts` first, and against the key shipped with the package if that file has no entry for the server; an unknown host is rejected.
+If the check fails although the server is genuine (for example after a reinstall), remove the server's line from `~/.ssh/known_hosts`.
 
 ## Where files go
 

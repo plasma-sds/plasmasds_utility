@@ -1,14 +1,89 @@
 """The public entry point: one :class:`DataClient` per client package."""
 
+import atexit
 import re
+import sys
 from pathlib import Path
 
-from plasmasds_utility import _config, _https, _paths
-from plasmasds_utility.exceptions import PathError
+from plasmasds_utility import _config, _https, _paths, _sftp
+from plasmasds_utility.exceptions import AuthError, PathError, TransferError
 
 _PREFIX = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 # On Windows these files share a directory with the client directories.
 _RESERVED = {_config.CONFIG_FILE, _config.LOG_FILE}
+# (prefix, key) -> reason, for files that came from public data in a fallback.
+_fallbacks = {}
+
+
+def _record_fallback(prefix, key, reason, path):
+    """Note that get() fell back to public data, and announce it."""
+    if (prefix, key) in _fallbacks:
+        return
+    first = not _fallbacks
+    _fallbacks[(prefix, key)] = str(reason)
+    _config.logger.info(
+        "using the public copy of %r for %s (%s): %s", key, prefix, reason, path
+    )
+    if first:
+        _config.logger.warning(
+            "using public data instead of private data for %r (%s); further cases "
+            "are only logged in %s and listed at exit, or by "
+            "plasmasds_utility.show_public_fallbacks()",
+            key,
+            reason,
+            _config.log_dir() / _config.LOG_FILE,
+        )
+
+
+def _fallback_summary():
+    """Return the text listing the fallbacks of this process."""
+    if not _fallbacks:
+        return "All files came from the source asked for; no public fallbacks."
+    lines = [
+        f"{len(_fallbacks)} file(s) came from the public server instead of the "
+        "private one:"
+    ]
+    lines += [
+        f"  {prefix}: {key} ({reason})" for (prefix, key), reason in _fallbacks.items()
+    ]
+    return "\n".join(lines)
+
+
+def show_public_fallbacks():
+    """Print the files that ``get`` took from public data instead of private data.
+
+    Lists, for this process, every file for which :meth:`DataClient.get` with the
+    default ``private=None`` fell back to public data, with the reason. The log
+    file keeps the same information for every process.
+
+    Returns
+    -------
+    None
+        The list is printed to standard output, not returned.
+
+    Examples
+    --------
+    >>> import plasmasds_utility
+    >>> plasmasds_utility.show_public_fallbacks()  # doctest: +SKIP
+    1 file(s) came from the public server instead of the private one:
+      renate-od: atomic_data/Na/rates.h5 (no SSH key found ...)
+    """
+    print(_fallback_summary())
+
+
+@atexit.register
+def _summary_at_exit():
+    if _fallbacks:
+        print(f"plasmasds_utility: {_fallback_summary()}", file=sys.stderr)
+
+
+def _present(path, key):
+    """Return whether path is a file; raise PathError if something else is there."""
+    if path.is_file():
+        return True
+    if path.exists():
+        raise PathError(f"cannot store {key!r} at {path}: it is not a file")
+    return False
 
 
 class DataClient:
@@ -134,21 +209,39 @@ class DataClient:
         _paths.check_key(key)  # before any I/O
         return _paths.local_path(self.client_dir(), key, private=private)
 
-    def get(self, key):
+    def get(self, key, *, private=None):
         """Return the local path of a data file, downloading it if it is missing.
 
-        For now this handles public data only: it returns the local public copy
-        (``local_path(key, private=False)``) if the file is there, and otherwise
-        downloads it over HTTPS from the public server. Private data, and the full
-        order of where to look, come in the next step.
+        Looks in this order and returns the first file found:
 
-        A file that is present locally is returned after a single ``stat``, without
-        contacting the server.
+        1. the local private copy;
+        2. the private server, over SFTP, downloading into the private copy;
+        3. the local public copy;
+        4. the public server, over HTTPS, downloading into the public copy.
+
+        ``private`` selects the sources: True uses only 1 and 2, False only 3 and
+        4, and None (the default) all four. With None, steps 1 and 2 give way to
+        public data only when private data is not available to you (no SSH key,
+        key rejected, unknown or mismatching host key; remembered for the rest of
+        the process) or the file is not on the private server. Any other failure
+        of the private server, such as a timeout, raises, so public data never
+        silently replaces private data. Such a fallback is announced: the first in
+        a process with a warning, every one in the log file, and all of them in a
+        summary at exit and in :func:`show_public_fallbacks`.
+
+        A local private copy is returned after a single ``stat``, without
+        contacting a server. With the default, a local public copy is returned only
+        after the private server has been asked once per file and process, because
+        private data comes first; use ``private=False`` to skip that, for example
+        offline.
 
         Parameters
         ----------
         key : str
             The data key (see :meth:`local_path`).
+        private : bool or None, default None
+            True for private data only, False for public data only (the private
+            server is never contacted), None for the best available.
 
         Returns
         -------
@@ -159,19 +252,43 @@ class DataClient:
         ------
         PathError
             If the key is invalid, or something other than a file is in the way.
+        AuthError
+            With ``private=True``, if private data is not available to you.
         TransferError
-            If the download fails, for example because the file is not on the
-            server.
+            If the private server fails, other than by the fallbacks above, or the
+            file is not on the servers that were tried.
         ConfigError
-            As for :meth:`client_dir`.
+            As for :meth:`client_dir`, or if the configured SSH key is missing or
+            unreadable.
         """
-        path = self.local_path(key, private=False)
-        if path.is_file():
-            return path
-        if path.exists():
-            raise PathError(f"cannot store {key!r} at {path}: it is not a file")
-        url = _paths.public_url(_config.settings(), self.prefix, key)
-        return _https.download(url, path)
+        settings = _config.settings()
+        reason = None
+        if private is not False:
+            private_path = self.local_path(key, private=True)
+            if _present(private_path, key):
+                return private_path
+            remote = _paths.private_remote(settings, self.prefix, key)
+            try:
+                return _sftp.download(settings, remote, private_path)
+            except (AuthError, _sftp.NotOnServer) as error:
+                if private:
+                    raise
+                reason = error
+        public_path = self.local_path(key, private=False)
+        if not _present(public_path, key):
+            url = _paths.public_url(settings, self.prefix, key)
+            try:
+                _https.download(url, public_path)
+            except TransferError as error:
+                if reason is None:
+                    raise
+                raise TransferError(
+                    f"cannot get {key!r}: not from the private server ({reason}), "
+                    f"and not from the public server ({error})"
+                ) from error
+        if reason is not None:
+            _record_fallback(self.prefix, key, reason, public_path)
+        return public_path
 
     def set_working_dir(self, path):
         """Save the working directory for this client in the user configuration.
@@ -259,3 +376,51 @@ class DataClient:
             return
         _config.save_working_dir(self.prefix, None)
         _config.logger.info("removed the working directory for %r", self.prefix)
+
+
+def set_ssh_key(path):
+    """Save the SSH private key used for private data, for every client package.
+
+    Without a saved key, the keys in the SSH agent and the standard ``~/.ssh/id_*``
+    files are tried. Open SSH sessions are closed and remembered login failures
+    forgotten, so the change takes effect at once. A key with a passphrase must be
+    loaded into the agent (``ssh-add``), because the utility never asks for a
+    passphrase.
+
+    Parameters
+    ----------
+    path : str or os.PathLike or None
+        The private key file. ``~`` is expanded and a relative path is taken
+        relative to the current directory. None removes the saved key.
+
+    Returns
+    -------
+    pathlib.Path or None
+        The absolute key file that was saved, or None if it was removed.
+
+    Raises
+    ------
+    PathError
+        If the file does not exist.
+    ConfigError
+        If the user configuration file is invalid or cannot be written, or the log
+        directory cannot be created.
+
+    Examples
+    --------
+    >>> import plasmasds_utility
+    >>> plasmasds_utility.set_ssh_key("~/.ssh/plasmasds_deep")  # doctest: +SKIP
+    """
+    _config.start_logging()
+    if path is None:
+        _config.save_ssh_key(None)
+        _sftp.close_all()
+        _config.logger.info("removed the saved SSH key")
+        return None
+    key = Path(path).expanduser().absolute()
+    if not key.is_file():
+        raise PathError(f"cannot use {key} as the SSH key: no such file")
+    _config.save_ssh_key(str(key))
+    _sftp.close_all()  # use the new key at once, not a remembered failure
+    _config.logger.info("SSH key set to %s", key)
+    return key

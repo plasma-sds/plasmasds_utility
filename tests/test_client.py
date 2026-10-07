@@ -4,15 +4,21 @@ import logging
 import os
 import subprocess
 import sys
+import types
 
 import pytest
+from conftest import write_config
 
+import plasmasds_utility
+import plasmasds_utility.client as client_module
 from plasmasds_utility import (
+    AuthError,
     ConfigError,
     DataClient,
     PathError,
     TransferError,
     _config,
+    _sftp,
 )
 
 logger = logging.getLogger("plasmasds_utility")
@@ -284,10 +290,13 @@ def test_local_path_rejects_an_invalid_key_before_any_io(home):
 
 @pytest.fixture
 def public_server(http_server):
-    """The local HTTP server, configured as the public data server."""
-    path = _config.config_dir() / _config.CONFIG_FILE
-    path.parent.mkdir(parents=True)
-    path.write_text(json.dumps({"public_url": http_server.url("/~data")}), "utf-8")
+    """The local HTTP server as the public data server; no private access.
+
+    The private server is marked unavailable, as for a user without an SSH key,
+    so no SSH connection is attempted.
+    """
+    write_config(host="127.0.0.1", port=9, public_url=http_server.url("/~data"))
+    _sftp._unavailable[("127.0.0.1", 9, "data")] = AuthError("no key in this test")
     return http_server
 
 
@@ -347,3 +356,322 @@ def test_get_rejects_an_invalid_key_before_any_io(home):
     with pytest.raises(PathError, match="invalid data key"):
         DataClient("renate-od").get("/abs")
     assert list(home.iterdir()) == []
+
+
+@pytest.fixture
+def key_file(home):
+    key = home / ".ssh" / "plasmasds_test"
+    key.parent.mkdir()
+    key.write_text("not a real key", encoding="utf-8")
+    return key
+
+
+def test_set_ssh_key_saves_the_absolute_path(key_file):
+    assert plasmasds_utility.set_ssh_key(key_file) == key_file
+    assert _config.ssh_key() == key_file
+
+
+def test_set_ssh_key_expands_user_and_relative_paths(key_file, home, monkeypatch):
+    assert plasmasds_utility.set_ssh_key("~/.ssh/plasmasds_test") == key_file
+    monkeypatch.chdir(home / ".ssh")
+    assert plasmasds_utility.set_ssh_key("plasmasds_test") == key_file
+
+
+def test_set_ssh_key_rejects_a_missing_file(home):
+    with pytest.raises(PathError, match="no such file"):
+        plasmasds_utility.set_ssh_key(home / "missing")
+    assert not (_config.config_dir() / _config.CONFIG_FILE).exists()
+
+
+def test_set_ssh_key_none_clears_it(key_file):
+    plasmasds_utility.set_ssh_key(key_file)
+    assert plasmasds_utility.set_ssh_key(None) is None
+    assert _config.ssh_key() is None
+
+
+def test_set_ssh_key_takes_effect_without_a_restart(sftp_server, home):
+    settings = _config.settings()
+    write_config(
+        host="127.0.0.1", port=sftp_server.port, host_keys=settings["host_keys"]
+    )
+    path = sftp_server.key_file.parent.parent.parent / "server" / "private_html"
+    (path / "renate-od").mkdir(parents=True)
+    (path / "renate-od" / "a.h5").write_bytes(b"real")
+    client = DataClient("renate-od")
+    with pytest.raises(AuthError, match="no SSH key found"):
+        client.get("a.h5", private=True)
+    plasmasds_utility.set_ssh_key(sftp_server.key_file)
+    assert client.get("a.h5", private=True).read_bytes() == b"real"
+
+
+def test_set_ssh_key_logs_the_change(key_file):
+    plasmasds_utility.set_ssh_key(key_file)
+    text = (_config.log_dir() / _config.LOG_FILE).read_text("utf-8")
+    assert f"SSH key set to {key_file}" in text
+
+
+class Servers:
+    """The local SFTP and HTTP servers as the private and public data servers."""
+
+    def __init__(self, sftp, http, root):
+        self.sftp = sftp
+        self.http = http
+        self.root = root
+
+    def put_private(self, key, body=b"private"):
+        path = self.root.joinpath("private_html", "renate-od", *key.split("/"))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(body)
+
+    def put_public(self, key, body=b"public"):
+        self.http.serve(f"/~data/renate-od/{key}", {"body": body})
+
+    def public_requests(self):
+        return sum(self.http.requests.values())
+
+
+@pytest.fixture
+def servers(sftp_server, http_server, tmp_path):
+    settings = _config.settings()
+    write_config(
+        host="127.0.0.1",
+        port=sftp_server.port,
+        host_keys=settings["host_keys"],
+        ssh_key=settings["ssh_key"],
+        public_url=http_server.url("/~data"),
+    )
+    return Servers(sftp_server, http_server, tmp_path / "server")
+
+
+def place(path, body):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(body)
+
+
+def test_get_returns_the_local_private_copy_without_any_server(servers):
+    client = DataClient("renate-od")
+    place(client.local_path("a.h5"), b"mine")
+    assert client.get("a.h5").read_bytes() == b"mine"
+    assert servers.sftp.connections == 0
+    assert servers.public_requests() == 0
+
+
+def test_get_downloads_private_data_first(servers):
+    servers.put_private("a/b.h5", b"real")
+    servers.put_public("a/b.h5", b"dummy")
+    client = DataClient("renate-od")
+    path = client.get("a/b.h5")
+    assert path == client.local_path("a/b.h5", private=True)
+    assert path.read_bytes() == b"real"
+    assert servers.public_requests() == 0
+
+
+def test_a_local_public_copy_does_not_block_a_private_download(servers):
+    servers.put_private("a.h5", b"real")
+    client = DataClient("renate-od")
+    place(client.local_path("a.h5", private=False), b"dummy")
+    assert client.get("a.h5").read_bytes() == b"real"
+
+
+def test_get_falls_back_to_the_local_public_copy(servers, caplog):
+    client = DataClient("renate-od")
+    place(client.local_path("a.h5", private=False), b"dummy")
+    with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
+        path = client.get("a.h5")
+    assert path == client.local_path("a.h5", private=False)
+    assert "using public data instead of private data for 'a.h5'" in caplog.text
+    assert "is not on the private server" in caplog.text
+    assert servers.public_requests() == 0
+
+
+def test_local_public_copy_asks_the_private_server_once(servers):
+    client = DataClient("renate-od")
+    place(client.local_path("a.h5", private=False), b"dummy")
+    for _ in range(3):
+        assert client.get("a.h5").read_bytes() == b"dummy"
+    assert servers.sftp.stats["private_html/renate-od/a.h5"] == 1
+
+
+def test_get_falls_back_to_a_public_download(servers):
+    servers.put_public("a.h5", b"dummy")
+    client = DataClient("renate-od")
+    assert client.get("a.h5").read_bytes() == b"dummy"
+    assert servers.public_requests() == 1
+
+
+def test_only_the_first_fallback_warns(servers, caplog):
+    for key in ("a.h5", "b.h5", "c.h5"):
+        servers.put_public(key)
+    client = DataClient("renate-od")
+    with caplog.at_level(logging.INFO, logger="plasmasds_utility"):
+        for key in ("a.h5", "b.h5", "c.h5", "a.h5"):
+            client.get(key)
+    warnings = [
+        r
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "instead of private" in r.getMessage()
+    ]
+    assert len(warnings) == 1
+    assert "show_public_fallbacks()" in warnings[0].getMessage()
+    assert str(_config.log_dir() / _config.LOG_FILE) in warnings[0].getMessage()
+    logged = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
+    for key in ("a.h5", "b.h5", "c.h5"):
+        assert sum(f"using the public copy of {key!r}" in m for m in logged) == 1
+
+
+def test_every_fallback_is_in_the_log_file(servers):
+    servers.put_public("a.h5")
+    servers.put_public("b.h5")
+    client = DataClient("renate-od")
+    client.get("a.h5")
+    client.get("b.h5")
+    text = (_config.log_dir() / _config.LOG_FILE).read_text("utf-8")
+    assert "using the public copy of 'a.h5' for renate-od" in text
+    assert "using the public copy of 'b.h5' for renate-od" in text
+
+
+def test_show_public_fallbacks_lists_them(servers, capsys):
+    servers.put_public("a.h5")
+    servers.put_public("dir/b.h5")
+    client = DataClient("renate-od")
+    client.get("a.h5")
+    client.get("dir/b.h5")
+    capsys.readouterr()
+    assert plasmasds_utility.show_public_fallbacks() is None
+    out = capsys.readouterr().out
+    assert "2 file(s) came from the public server instead of the private one" in out
+    assert "  renate-od: a.h5 (" in out
+    assert "  renate-od: dir/b.h5 (" in out
+    assert "is not on the private server" in out
+
+
+def test_show_public_fallbacks_without_any(capsys):
+    plasmasds_utility.show_public_fallbacks()
+    assert "no public fallbacks" in capsys.readouterr().out
+
+
+def test_summary_at_exit_only_with_fallbacks(servers, capsys):
+    client_module._summary_at_exit()
+    assert capsys.readouterr().err == ""
+    servers.put_public("a.h5")
+    DataClient("renate-od").get("a.h5")
+    capsys.readouterr()
+    client_module._summary_at_exit()
+    err = capsys.readouterr().err
+    assert err.startswith("plasmasds_utility: 1 file(s) came from the public server")
+    assert "renate-od: a.h5" in err
+
+
+def test_summary_at_exit_in_a_real_process(home, http_server):
+    http_server.serve("/~data/renate-od/a.h5", {"body": b"dummy"})
+    code = (
+        "import plasmasds_utility as p, plasmasds_utility._sftp as s;"
+        "from plasmasds_utility import _config as c;"
+        "st = c.settings();"
+        "s._unavailable[(st['host'], st['port'], st['user'])] = p.AuthError('no key');"
+        "p.DataClient('renate-od').get('a.h5')"
+    )
+    write_config(host="127.0.0.1", port=9, public_url=http_server.url("/~data"))
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        env=os.environ.copy(),
+        check=True,
+    )
+    assert "plasmasds_utility: 1 file(s) came from the public server" in result.stderr
+    assert "renate-od: a.h5 (no key)" in result.stderr
+
+
+def test_private_true_never_uses_public_data(servers):
+    servers.put_public("a.h5", b"dummy")
+    client = DataClient("renate-od")
+    with pytest.raises(TransferError, match="is not on the private server"):
+        client.get("a.h5", private=True)
+    assert servers.public_requests() == 0
+    assert not client.local_path("a.h5", private=False).exists()
+
+
+def test_private_true_raises_without_access(servers):
+    write_config(
+        host="127.0.0.1",
+        port=servers.sftp.port,
+        host_keys=_config.settings()["host_keys"],
+        public_url=servers.http.url("/~data"),
+    )
+    servers.put_public("a.h5")
+    with pytest.raises(AuthError, match="no SSH key found"):
+        DataClient("renate-od").get("a.h5", private=True)
+    assert servers.public_requests() == 0
+
+
+def test_private_true_downloads_private_data(servers):
+    servers.put_private("a.h5", b"real")
+    assert DataClient("renate-od").get("a.h5", private=True).read_bytes() == b"real"
+
+
+def test_private_false_never_contacts_the_private_server(servers, capsys):
+    servers.put_private("a.h5", b"real")
+    servers.put_public("a.h5", b"dummy")
+    client = DataClient("renate-od")
+    path = client.get("a.h5", private=False)
+    assert path == client.local_path("a.h5", private=False)
+    assert path.read_bytes() == b"dummy"
+    assert servers.sftp.connections == 0
+    plasmasds_utility.show_public_fallbacks()
+    assert "no public fallbacks" in capsys.readouterr().out  # asked for, not a fallback
+
+
+def test_private_false_ignores_a_local_private_copy(servers):
+    client = DataClient("renate-od")
+    place(client.local_path("a.h5"), b"real")
+    servers.put_public("a.h5", b"dummy")
+    assert client.get("a.h5", private=False).read_bytes() == b"dummy"
+
+
+def test_private_false_reports_a_missing_public_file(servers):
+    with pytest.raises(TransferError, match="not on the public server") as error:
+        DataClient("renate-od").get("a.h5", private=False)
+    assert "private server" not in str(error.value)
+
+
+def test_without_a_key_public_data_is_used_and_ssh_not_retried(servers, caplog):
+    write_config(
+        host="127.0.0.1",
+        port=servers.sftp.port,
+        host_keys=_config.settings()["host_keys"],
+        public_url=servers.http.url("/~data"),
+    )
+    servers.put_private("a.h5")
+    servers.put_public("a.h5", b"dummy")
+    servers.put_public("b.h5", b"dummy")
+    client = DataClient("renate-od")
+    with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
+        assert client.get("a.h5").read_bytes() == b"dummy"
+        assert client.get("b.h5").read_bytes() == b"dummy"
+    assert servers.sftp.connections == 1  # the failure is remembered
+    assert "no SSH key found" in caplog.text
+
+
+def test_private_server_failure_is_not_hidden_by_public_data(servers, monkeypatch):
+    monkeypatch.setattr(_sftp, "time", types.SimpleNamespace(sleep=lambda s: None))
+    servers.sftp.fail_connections = 3
+    servers.put_public("a.h5", b"dummy")
+    with pytest.raises(TransferError, match="after 3 attempts"):
+        DataClient("renate-od").get("a.h5")
+    assert servers.public_requests() == 0
+
+
+def test_get_reports_a_file_on_neither_server(servers):
+    with pytest.raises(TransferError, match="cannot get 'a.h5'") as error:
+        DataClient("renate-od").get("a.h5")
+    assert "not on the private server" in str(error.value)
+    assert "not on the public server" in str(error.value)
+
+
+def test_get_refuses_a_directory_in_the_private_copy(servers):
+    client = DataClient("renate-od")
+    client.local_path("a.h5").mkdir(parents=True)
+    with pytest.raises(PathError, match="it is not a file"):
+        client.get("a.h5")
+    assert servers.sftp.connections == 0
