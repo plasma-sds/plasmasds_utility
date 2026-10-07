@@ -8,11 +8,13 @@ Host keys: the user's ``~/.ssh/known_hosts`` is checked first, as plain ``ssh`` 
 file has no entry for. Unknown hosts are rejected, never added.
 
 Login: the key set with ``set_ssh_key``, the keys in the SSH agent, and the standard
-``~/.ssh/id_*`` files. The utility never asks for a passphrase.
+``~/.ssh/id_*`` files. The utility never asks for a passphrase: a saved key that has
+one is used through the SSH agent.
 
 Failures that retrying cannot fix (a host key mismatch, an unknown host, a rejected or
-missing key, a key with a passphrase) raise :class:`AuthError` and are remembered for
-the rest of the process, so later calls fail at once instead of trying again.
+missing key, a key with a passphrase that is not in the agent) raise
+:class:`AuthError` and are remembered until Python (or the Python kernel) restarts, so
+later calls fail at once instead of trying again; the messages say so.
 
 One SFTP transfer runs at a time per process; parallel calls take turns.
 """
@@ -47,38 +49,43 @@ def _host_name(host, port):
 
 
 def _load_key(path):
-    """Load the configured private key, or return None if none is configured.
+    """Load the configured private key.
 
     Loaded here rather than passed to paramiko as a file name: paramiko then tries
     every key type and reports the last loading error instead of a rejected login.
 
+    Returns
+    -------
+    tuple
+        ``(key, locked)``: the loaded key, or None if none is configured or the
+        key has a passphrase (the SSH agent is then used for it), and whether it
+        has a passphrase.
+
     Raises
     ------
-    AuthError
-        If the key has a passphrase.
     ConfigError
         If the file cannot be read as a private key.
     """
     if path is None:
-        return None
+        return None, False
     try:
-        return paramiko.PKey.from_path(str(path))
+        return paramiko.PKey.from_path(str(path)), False
     except (TypeError, paramiko.PasswordRequiredException) as error:
         if "encrypted" not in str(error) and not isinstance(
             error, paramiko.PasswordRequiredException
         ):
             raise
-        raise AuthError(
-            f"the SSH key {path} has a passphrase; load it into the SSH agent "
-            "(ssh-add), because plasmasds_utility never asks for one"
-        ) from error
+        _config.logger.info(
+            "the SSH key %s has a passphrase; using the SSH agent for it", path
+        )
+        return None, True
     except (ValueError, paramiko.SSHException, OSError) as error:
         raise ConfigError(
             f"cannot read {path} as an SSH private key: {error}"
         ) from error
 
 
-def _connect(settings, timeout):
+def _connect(settings, timeout, key):
     """Open an SSH session and an SFTP channel; raise paramiko or socket errors."""
     host, port, user = _server(settings)
     name = _host_name(host, port)
@@ -93,7 +100,6 @@ def _connect(settings, timeout):
             raise ConfigError(f"invalid entry in host_keys: {line!r}")
         client.get_host_keys().add(name, entry.key.get_name(), entry.key)
     client.set_missing_host_key_policy(paramiko.RejectPolicy())
-    key = _load_key(_config.ssh_key())
     try:
         client.connect(
             host,
@@ -115,35 +121,57 @@ def _connect(settings, timeout):
     return client, sftp
 
 
-def _auth_error(error, settings):
-    """Return an AuthError for a failure that retrying cannot fix, else None."""
+_RESTART = (
+    "then restart Python (or the Python kernel), because this failure is "
+    "remembered until then"
+)
+
+
+def _auth_error(error, settings, locked_key):
+    """Return an AuthError for a failure that retrying cannot fix, else None.
+
+    ``locked_key`` is the configured key file if it has a passphrase, else None.
+    """
     host, port, user = _server(settings)
     name = _host_name(host, port)
     if isinstance(error, paramiko.BadHostKeyException):
         return AuthError(
             f"the host key of {name} does not match the trusted one (from "
             "~/.ssh/known_hosts, or else the key shipped with plasmasds_utility). "
-            "If the server was reinstalled, remove its line from ~/.ssh/known_hosts; "
-            "otherwise do not connect: someone may be impersonating the server"
+            "If the server was reinstalled, remove its line from ~/.ssh/known_hosts "
+            f"and {_RESTART}; otherwise do not connect: someone may be "
+            "impersonating the server"
+        )
+    login_failed = isinstance(error, paramiko.AuthenticationException) or (
+        isinstance(error, paramiko.SSHException)
+        and "No authentication methods available" in str(error)
+    )
+    if login_failed and locked_key is not None:
+        return AuthError(
+            f"SSH login as {user}@{name} failed: the SSH key {locked_key} has a "
+            "passphrase and the SSH agent could not log in with it; load it with "
+            f"ssh-add, {_RESTART}"
         )
     if isinstance(error, paramiko.AuthenticationException):
         return AuthError(
             f"SSH login as {user}@{name} failed ({error}); check the key set with "
             "plasmasds_utility.set_ssh_key(), or load a key with a passphrase into "
-            "the SSH agent"
+            f"the SSH agent (ssh-add); {_RESTART}"
         )
-    if isinstance(error, paramiko.SSHException):
-        message = str(error)
-        if "No authentication methods available" in message:
-            return AuthError(
-                f"no SSH key found for {user}@{name}: set one with "
-                "plasmasds_utility.set_ssh_key(), or load it into the SSH agent"
-            )
-        if "not found in known_hosts" in message:
-            return AuthError(
-                f"{name} is not a known host: it is neither in ~/.ssh/known_hosts nor "
-                "among the keys shipped with plasmasds_utility, so it is rejected"
-            )
+    if login_failed:
+        return AuthError(
+            f"no SSH key found for {user}@{name}: set one with "
+            "plasmasds_utility.set_ssh_key(), or load it into the SSH agent "
+            f"(ssh-add); {_RESTART}"
+        )
+    if isinstance(error, paramiko.SSHException) and "not found in known_hosts" in str(
+        error
+    ):
+        return AuthError(
+            f"{name} is not a known host: it is neither in ~/.ssh/known_hosts nor "
+            f"among the keys shipped with plasmasds_utility, so it is rejected; "
+            f"if this is wrong, fix the host keys and {_RESTART}"
+        )
     return None
 
 
@@ -196,8 +224,8 @@ def download(settings, remote, target, *, timeout=30, attempts=3, backoff=1.0):
     ------
     AuthError
         If the host key does not match, the host is unknown, or the login fails or
-        no key is found. Remembered: later calls for the same server raise it again
-        without connecting.
+        no key is found. Remembered until Python restarts: later calls for the
+        same server raise it again without connecting.
     TransferError
         If the file is not on the server, access to it is denied, or the download
         still fails after the last attempt.
@@ -213,15 +241,16 @@ def download(settings, remote, target, *, timeout=30, attempts=3, backoff=1.0):
             if server in _unavailable:
                 # A fresh traceback each time, or the cached one grows per call.
                 raise _unavailable[server].with_traceback(None)
+            locked_key = None
             try:
                 if server not in _sessions:
-                    _sessions[server] = _connect(settings, timeout)
+                    key_path = _config.ssh_key()
+                    key, locked = _load_key(key_path)
+                    locked_key = key_path if locked else None
+                    _sessions[server] = _connect(settings, timeout, key)
                 _fetch(_sessions[server][1], remote, target)
-            except AuthError as error:  # a key with a passphrase, from _load_key
-                _unavailable[server] = error
-                raise
             except (paramiko.SSHException, OSError, EOFError) as error:
-                auth_error = _auth_error(error, settings)
+                auth_error = _auth_error(error, settings, locked_key)
                 if auth_error is not None:
                     _close(server)
                     _unavailable[server] = auth_error

@@ -199,38 +199,104 @@ def test_no_key_at_all_fails_at_once(served, home, sleeps):
     assert sleeps == []
 
 
-def test_key_with_a_passphrase_is_not_prompted_for(served, home, sleeps):
-    locked = home / ".ssh" / "locked_key"
-    paramiko.RSAKey.generate(1024).write_private_key_file(str(locked), password="pw")
+class FakeAgent:
+    """Stands in for paramiko's SSH agent client, holding the given keys."""
+
+    keys = ()
+
+    def get_keys(self):
+        return tuple(self.keys)
+
+    def close(self):
+        pass
+
+
+@pytest.fixture
+def agent(monkeypatch):
+    """An SSH agent for paramiko's client, empty until keys are put in it."""
+    monkeypatch.setattr(paramiko.client, "Agent", FakeAgent)
+    monkeypatch.setattr(FakeAgent, "keys", [])
+    return FakeAgent
+
+
+def write_locked_key(path, key):
+    key.write_private_key_file(str(path), password="pw")
+    return path
+
+
+def test_locked_key_in_the_agent_is_used(served, home, ssh_keys, agent):
+    _, client_key = ssh_keys
+    locked = write_locked_key(home / ".ssh" / "locked_key", client_key)
+    agent.keys.append(client_key)
     write_config(
         host="127.0.0.1",
         port=served.port,
         host_keys=_config.settings()["host_keys"],
         ssh_key=str(locked),
     )
-    with pytest.raises(AuthError, match="has a passphrase; load it into the SSH agent"):
-        download(home / "x.h5")
-    assert served.connections == 0
-    assert sleeps == []
+    download(home / "x.h5")
+    assert (home / "x.h5").read_bytes() == b"private data"
 
 
-def test_key_with_a_passphrase_is_remembered(served, home):
-    locked = home / ".ssh" / "locked_key"
-    paramiko.RSAKey.generate(1024).write_private_key_file(str(locked), password="pw")
-    host_keys = _config.settings()["host_keys"]
-    write_config(
-        host="127.0.0.1", port=served.port, host_keys=host_keys, ssh_key=str(locked)
-    )
-    with pytest.raises(AuthError):
-        download(home / "x.h5")
-    # A usable key now would work, but the failure is remembered for the process.
+def test_locked_key_not_in_the_agent_fails_without_prompting(
+    served, home, ssh_keys, agent, sleeps
+):
+    _, client_key = ssh_keys
+    locked = write_locked_key(home / ".ssh" / "locked_key", client_key)
     write_config(
         host="127.0.0.1",
         port=served.port,
-        host_keys=host_keys,
-        ssh_key=str(served.key_file),
+        host_keys=_config.settings()["host_keys"],
+        ssh_key=str(locked),
     )
+    with pytest.raises(AuthError) as error:
+        download(home / "x.h5")
+    message = str(error.value)
+    assert f"the SSH key {locked} has a passphrase" in message
+    assert "load it with ssh-add" in message
+    assert "restart Python (or the Python kernel)" in message
+    assert sleeps == []
+
+
+def test_locked_key_failure_is_remembered(served, home, ssh_keys, agent):
+    _, client_key = ssh_keys
+    locked = write_locked_key(home / ".ssh" / "locked_key", client_key)
+    write_config(
+        host="127.0.0.1",
+        port=served.port,
+        host_keys=_config.settings()["host_keys"],
+        ssh_key=str(locked),
+    )
+    with pytest.raises(AuthError):
+        download(home / "x.h5")
+    agent.keys.append(client_key)  # ssh-add after the failure
+    connections = served.connections
     with pytest.raises(AuthError, match="has a passphrase"):
+        download(home / "x.h5")
+    assert served.connections == connections  # remembered until a restart
+
+
+@pytest.mark.parametrize(
+    "setup", ["rejected", "no_key", "unknown_host", "bad_host_key"]
+)
+def test_remembered_failures_say_to_restart_python(served, home, setup):
+    settings = {"host": "127.0.0.1", "port": served.port}
+    host_keys = _config.settings()["host_keys"]
+    if setup == "rejected":
+        other = home / ".ssh" / "other_key"
+        paramiko.RSAKey.generate(1024).write_private_key_file(str(other))
+        settings.update(host_keys=host_keys, ssh_key=str(other))
+    elif setup == "no_key":
+        settings.update(host_keys=host_keys)
+    elif setup == "unknown_host":
+        settings.update(host_keys=[], ssh_key=str(served.key_file))
+    else:
+        wrong = paramiko.RSAKey.generate(1024)
+        settings.update(
+            host_keys=[f"ssh-rsa {wrong.get_base64()}"], ssh_key=str(served.key_file)
+        )
+    write_config(**settings)
+    with pytest.raises(AuthError, match=r"restart Python \(or the Python kernel\)"):
         download(home / "x.h5")
 
 
