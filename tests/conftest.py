@@ -100,6 +100,18 @@ ENV_VARIABLES = (
 )
 
 
+class FakeAgent:
+    """Stands in for paramiko's SSH agent client; holds the keys in ``keys``."""
+
+    keys = []
+
+    def get_keys(self):
+        return tuple(self.keys)
+
+    def close(self):
+        pass
+
+
 @pytest.fixture(autouse=True)
 def home(tmp_path, monkeypatch):
     """Point every location the package may touch into a temporary home directory."""
@@ -112,6 +124,10 @@ def home(tmp_path, monkeypatch):
         monkeypatch.delenv(variable, raising=False)
     monkeypatch.setattr(_config, "_settings", None)
     monkeypatch.setattr(client, "_fallbacks", {})
+    # Never use a real SSH agent: unsetting SSH_AUTH_SOCK is not enough on Windows,
+    # where paramiko asks Pageant or the OpenSSH agent pipe directly.
+    monkeypatch.setattr(paramiko.client, "Agent", FakeAgent)
+    monkeypatch.setattr(FakeAgent, "keys", [])
     yield home
     _sftp.close_all()
     # Close the log file, or Windows cannot delete the temporary directory.

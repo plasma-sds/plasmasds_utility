@@ -6,7 +6,7 @@ from pathlib import Path, PurePosixPath
 
 import paramiko
 import pytest
-from conftest import write_config
+from conftest import FakeAgent, write_config
 
 from plasmasds_utility import AuthError, ConfigError, TransferError, _config, _sftp
 
@@ -199,23 +199,9 @@ def test_no_key_at_all_fails_at_once(served, home, sleeps):
     assert sleeps == []
 
 
-class FakeAgent:
-    """Stands in for paramiko's SSH agent client, holding the given keys."""
-
-    keys = ()
-
-    def get_keys(self):
-        return tuple(self.keys)
-
-    def close(self):
-        pass
-
-
 @pytest.fixture
-def agent(monkeypatch):
-    """An SSH agent for paramiko's client, empty until keys are put in it."""
-    monkeypatch.setattr(paramiko.client, "Agent", FakeAgent)
-    monkeypatch.setattr(FakeAgent, "keys", [])
+def agent():
+    """The stand-in SSH agent from conftest, empty until keys are put in it."""
     return FakeAgent
 
 
