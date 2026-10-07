@@ -4,8 +4,8 @@ A shared utility package for the plasma-sds synthetic diagnostics (renate, neuro
 Its first job is data access: fetching the data files a package needs from the group's data server when they are not available locally, and uploading data to the server on request.
 
 > **Status:** early development, no release yet.
-> What works so far: choosing where each client's data is stored, where each data file goes, and downloading private and public data (below).
-> Checking the server for newer data and uploading come in the next steps.
+> What works so far: choosing where each client's data is stored, where each data file goes, downloading private and public data, and checking the server for newer data (below).
+> Uploading comes in the next step.
 
 ## Planned scope (first version)
 
@@ -24,9 +24,13 @@ from plasmasds_utility import DataClient
 
 data = DataClient("renate-od")
 path = data.get("atomic_data/Na/rates.h5")  # local path; downloaded if missing
+with h5py.File(path) as f:  # the client package opens the file itself
+    ...
 ```
 
-`get` returns the first of these it finds:
+`get` returns the local path of a data file, downloading it first if needed; it does not open the file.
+Client packages call it every time they need a file: when the file is already on disk, that costs a single `stat`.
+It returns the first of these it finds:
 
 1. the local private copy;
 2. the file on the private server, downloaded over SFTP (needs an SSH key);
@@ -53,6 +57,21 @@ To list them at any time, for example at the end of a notebook:
 ```python
 plasmasds_utility.show_public_fallbacks()
 ```
+
+### Newer data on the server
+
+By default, a local copy is used without asking the server whether it has a newer version; the first time this happens for private data in a session, a notice says so.
+To check:
+
+```python
+data.get(key, check_server=True)  # download again if the server copy differs
+data.get(key, force=True)  # download again regardless (a corrupted local copy)
+data.check_updates()  # check every local file of this client
+```
+
+The check compares modification time and size, from the local file and from the server (SFTP for private data, an HTTPS `HEAD` request for public data), and downloads again when the server copy is newer or differs in size.
+`check_updates()` covers both the private and the public copies.
+`check_updates()` prints a short report and returns the files it downloaded again; a file missing on the server is kept with a warning.
 
 ### Private data
 
