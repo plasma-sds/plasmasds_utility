@@ -34,9 +34,24 @@ path = data.get("atomic_data/Na/rates.h5")  # local path; downloaded if missing
 4. the file on the public server, downloaded over HTTPS.
 
 A local copy is returned straight away, without contacting a server.
-The private server is skipped when you have no access to it (no key, key rejected), which is remembered for the session, or when the file is not there; any other failure, such as a timeout, is raised instead, so public data never silently replaces private data.
-Using public data logs a warning.
 Downloads are written to a temporary file and moved into place only when complete, and the local file keeps the server's modification time.
+
+To choose the source, pass `private`:
+
+```python
+data.get(key)  # best available: private if you have access, else public
+data.get(key, private=True)  # private only: raises instead of using public data
+data.get(key, private=False)  # public only: never contacts the private server
+```
+
+With the default, private data gives way to public data only when you have no access to it (no key, key rejected; remembered for the session) or the file is not on the private server.
+Any other failure, such as a timeout, is raised, so public data never silently replaces private data.
+Such fallbacks are announced: the first one in a session with a warning, every one in the log file, and all of them in a summary when the program ends.
+To list them at any time, for example at the end of a notebook:
+
+```python
+plasmasds_utility.show_public_fallbacks()
+```
 
 ### Private data
 
