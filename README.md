@@ -65,7 +65,8 @@ plasmasds_utility.set_ssh_key("~/.ssh/plasmasds_deep")  # saved for every client
 plasmasds_utility.set_ssh_key(None)  # back to the agent and ~/.ssh/id_*
 ```
 
-It never asks for a passphrase: load a key with a passphrase into the SSH agent (`ssh-add`).
+It never asks for a passphrase: load a key with a passphrase into the SSH agent (`ssh-add`); a saved key that has one is then used through the agent.
+A failed login is remembered for the session, so after fixing it (for example with `ssh-add`), restart Python (or the Python kernel).
 The server's host key is checked against your `~/.ssh/known_hosts` first, and against the key shipped with the package if that file has no entry for the server; an unknown host is rejected.
 If the check fails although the server is genuine (for example after a reinstall), remove the server's line from `~/.ssh/known_hosts`.
 
