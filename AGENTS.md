@@ -14,7 +14,7 @@ Sections 2–4, 6 and 7 are shared conventions for plasma-sds repositories devel
   Where the discussion and the PDF disagree, the discussion wins.
   The PDF is a direction, not a checklist: build feature set by feature set, as bare-bones as possible.
 - **Board:** [plasma-sds project 10](https://github.com/orgs/plasma-sds/projects/10).
-- **Targets:** Python 3.10+, Linux and Windows, published on PyPI.
+- **Targets:** Python 3.11+ (decided in #8), Linux and Windows, published on PyPI.
 
 Decisions already made (do not re-open them without an owner):
 
