@@ -56,6 +56,11 @@ def show_public_fallbacks():
     default ``private=None`` fell back to public data, with the reason. The log
     file keeps the same information for every process.
 
+    Returns
+    -------
+    None
+        The list is printed to standard output, not returned.
+
     Examples
     --------
     >>> import plasmasds_utility

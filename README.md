@@ -45,7 +45,7 @@ data.get(key, private=True)  # private only: raises instead of using public data
 data.get(key, private=False)  # public only: never contacts the private server
 ```
 
-With the default, private data gives way to public data only when you have no access to it (no key, key rejected; remembered for the session) or the file is not on the private server.
+With the default, private data gives way to public data only when you have no access to it (no key, key rejected, a host key that is unknown or does not match; remembered for the session) or the file is not on the private server.
 Any other failure, such as a timeout, is raised, so public data never silently replaces private data.
 Such fallbacks are announced: the first one in a session with a warning, every one in the log file, and all of them in a summary when the program ends.
 To list them at any time, for example at the end of a notebook:
