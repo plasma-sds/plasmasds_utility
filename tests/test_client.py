@@ -706,42 +706,44 @@ def place_at(path, body, mtime):
     os.utime(path, (mtime, mtime))
 
 
-def notices(caplog):
-    return [
-        r for r in caplog.records if "without checking the server" in r.getMessage()
-    ]
+def notices(capsys):
+    """Return the unchecked-data notices printed to stderr so far."""
+    err = capsys.readouterr().err
+    return [line for line in err.splitlines() if "without checking the server" in line]
 
 
-def test_local_private_copy_gives_one_notice(servers, caplog):
+def test_local_private_copy_gives_one_notice(servers, capsys, caplog):
     client = DataClient("renate-od")
     place(client.local_path("a.h5"), b"mine")
     place(client.local_path("b.h5"), b"mine")
-    with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
+    with caplog.at_level(logging.INFO, logger="plasmasds_utility"):
         client.get("a.h5")
         client.get("b.h5")
-    (notice,) = notices(caplog)
-    assert "DataClient('renate-od').check_updates()" in notice.getMessage()
-    assert "get(key, check_server=True)" in notice.getMessage()
+    (notice,) = notices(capsys)
+    assert notice.startswith("plasmasds_utility: using local data without checking")
+    assert "DataClient('renate-od').check_updates()" in notice
+    assert "get(key, check_server=True)" in notice
     assert servers.sftp.connections == 0
+    # A notice, not a warning: logged at INFO only.
+    levels = {r.levelno for r in caplog.records if "without checking" in r.getMessage()}
+    assert levels == {logging.INFO}
 
 
-def test_no_notice_when_the_server_is_checked(servers, caplog):
+def test_no_notice_when_the_server_is_checked(servers, capsys):
     client = DataClient("renate-od")
     servers.put_private("a.h5", b"mine", mtime=OLD)
     place_at(client.local_path("a.h5"), b"mine", OLD)
-    with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
-        client.get("a.h5", check_server=True)
-    assert notices(caplog) == []
+    client.get("a.h5", check_server=True)
+    assert notices(capsys) == []
 
 
-def test_no_notice_for_downloads_or_public_copies(servers, caplog):
+def test_no_notice_for_downloads_or_public_copies(servers, capsys):
     servers.put_private("a.h5")
     servers.put_public("b.h5")
     client = DataClient("renate-od")
-    with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
-        client.get("a.h5")  # downloaded, not an unchecked local copy
-        client.get("b.h5", private=False)
-    assert notices(caplog) == []
+    client.get("a.h5")  # downloaded, not an unchecked local copy
+    client.get("b.h5", private=False)
+    assert notices(capsys) == []
 
 
 @pytest.mark.parametrize(
@@ -916,13 +918,12 @@ def test_check_updates_with_nothing_local(servers, capsys):
     assert "checked 0 file(s)" in capsys.readouterr().out
 
 
-def test_check_updates_gives_no_notice(servers, caplog):
+def test_check_updates_gives_no_notice(servers, capsys):
     servers.put_private("a.h5", b"same", mtime=OLD)
     client = DataClient("renate-od")
     place_at(client.local_path("a.h5"), b"same", OLD)
-    with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
-        client.check_updates()
-    assert notices(caplog) == []
+    client.check_updates()
+    assert notices(capsys) == []
 
 
 def test_check_updates_prints_the_fallback_summary_after_fallbacks(servers, capsys):

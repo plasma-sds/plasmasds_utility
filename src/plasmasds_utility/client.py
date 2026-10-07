@@ -81,16 +81,22 @@ _noticed = False  # whether the unchecked-local-data notice was given
 
 
 def _notice_unchecked(prefix):
-    """Say once per process that local data is used without checking the server."""
+    """Say once per process that local data is used without checking the server.
+
+    A notice, not a warning: it is printed to stderr like the exit summary and
+    logged at INFO, so that warnings keep meaning that something went wrong.
+    """
     global _noticed
     if _noticed:
         return
     _noticed = True
-    _config.logger.warning(
+    text = (
         "using local data without checking the server for newer versions; to "
-        "check, call DataClient(%r).check_updates(), or get(key, check_server=True)",
-        prefix,
+        f"check, call DataClient({prefix!r}).check_updates(), or "
+        "get(key, check_server=True)"
     )
+    _config.logger.info(text)
+    print(f"plasmasds_utility: {text}", file=sys.stderr)
 
 
 def _differs(path, size, mtime):
