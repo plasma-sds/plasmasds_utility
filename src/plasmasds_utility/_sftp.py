@@ -216,7 +216,9 @@ def close_all():
 atexit.register(close_all)
 
 
-def download(settings, remote, target, *, timeout=30, attempts=3, backoff=1.0):
+def download(
+    settings, remote, target, *, use_cache=True, timeout=30, attempts=3, backoff=1.0
+):
     """Download a private file over SFTP to target.
 
     The local file gets the server's modification time.
@@ -230,6 +232,8 @@ def download(settings, remote, target, *, timeout=30, attempts=3, backoff=1.0):
     target : pathlib.Path
         Where to store it; missing directories are created, and an existing file is
         replaced only when the download is complete.
+    use_cache : bool, default True
+        False asks the server again for a file remembered as missing.
     timeout : float, default 30
         Seconds to wait for the connection, the login and each read.
     attempts : int, default 3
@@ -269,17 +273,19 @@ def download(settings, remote, target, *, timeout=30, attempts=3, backoff=1.0):
         timeout=timeout,
         attempts=attempts,
         backoff=backoff,
+        use_cache=use_cache,
     )
     _config.logger.info("downloaded %s to %s", remote, target)
     return target
 
 
-def _run(settings, remote, action, verb, *, timeout, attempts, backoff):
+def _run(settings, remote, action, verb, *, timeout, attempts, backoff, use_cache):
     """Call action(sftp) on a session for settings, with bounded retries.
 
     Opens or reuses the session, raises remembered failures at once, remembers
     new AuthErrors and NotOnServer, and retries other connection failures with a
-    new session. ``verb`` names the operation in messages. Returns the result of
+    new session. With ``use_cache`` false, a file remembered as missing is asked
+    for again. ``verb`` names the operation in messages. Returns the result of
     action.
     """
     if attempts < 1:
@@ -290,7 +296,7 @@ def _run(settings, remote, action, verb, *, timeout, attempts, backoff):
             if server in _unavailable:
                 # A fresh traceback each time, or the cached one grows per call.
                 raise _unavailable[server].with_traceback(None)
-            if (server, str(remote)) in _not_on_server:
+            if use_cache and (server, str(remote)) in _not_on_server:
                 raise NotOnServer(f"{remote} is not on the private server")
             locked_key = None
             if server in _sessions and not _alive(_sessions[server][0]):
@@ -301,7 +307,9 @@ def _run(settings, remote, action, verb, *, timeout, attempts, backoff):
                     key, locked = _load_key(key_path)
                     locked_key = key_path if locked else None
                     _sessions[server] = _connect(settings, timeout, key)
-                return action(_sessions[server][1])
+                result = action(_sessions[server][1])
+                _not_on_server.discard((server, str(remote)))
+                return result
             except NotOnServer:
                 _not_on_server.add((server, str(remote)))
                 raise
@@ -327,6 +335,46 @@ def _run(settings, remote, action, verb, *, timeout, attempts, backoff):
         f"cannot {verb} {remote} from {server[0]} after {attempts} attempts: "
         f"{last_error}"
     ) from last_error
+
+
+def stat(settings, remote, *, use_cache=True, timeout=30, attempts=3, backoff=1.0):
+    """Return the size and modification time of a private file on the server.
+
+    Parameters
+    ----------
+    settings, remote, use_cache, timeout, attempts, backoff
+        As for :func:`download`.
+
+    Returns
+    -------
+    tuple
+        ``(size, mtime)``: the size in bytes and the POSIX modification time.
+
+    Raises
+    ------
+    AuthError, TransferError, ConfigError, ValueError
+        As for :func:`download`.
+    """
+
+    def ask(sftp):
+        try:
+            attributes = sftp.stat(str(remote))
+        except OSError as error:
+            if _server_file_error(remote, error) is None:
+                raise
+            raise _server_file_error(remote, error) from error
+        return attributes.st_size, attributes.st_mtime
+
+    return _run(
+        settings,
+        remote,
+        ask,
+        "check",
+        timeout=timeout,
+        attempts=attempts,
+        backoff=backoff,
+        use_cache=use_cache,
+    )
 
 
 def _server_file_error(remote, error):

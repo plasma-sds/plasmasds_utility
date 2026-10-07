@@ -447,3 +447,55 @@ def test_shipped_host_key_parses_for_a_non_standard_port():
 def test_attempts_must_be_positive(home):
     with pytest.raises(ValueError, match="attempts must be at least 1"):
         download(home / "x.h5", attempts=0)
+
+
+def test_stat_returns_size_and_mtime(served):
+    assert _sftp.stat(_config.settings(), REMOTE) == (len(b"private data"), TIMESTAMP)
+    assert served.stats[str(REMOTE)] == 1
+
+
+def test_stat_reuses_the_session(served, home):
+    download(home / "x.h5")
+    _sftp.stat(_config.settings(), REMOTE)
+    assert served.connections == 1
+
+
+def test_stat_of_a_missing_file_is_remembered(sftp_server, sleeps):
+    settings = _config.settings()
+    for _ in range(2):
+        with pytest.raises(_sftp.NotOnServer):
+            _sftp.stat(settings, REMOTE)
+    assert sftp_server.stats[str(REMOTE)] == 1
+    assert sleeps == []
+
+
+def test_explicit_check_bypasses_the_missing_file_memory(sftp_server, tmp_path, home):
+    settings = _config.settings()
+    with pytest.raises(_sftp.NotOnServer):
+        _sftp.stat(settings, REMOTE)
+    # The file is uploaded during the session.
+    path = tmp_path / "server" / Path(*REMOTE.parts)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"new")
+    with pytest.raises(_sftp.NotOnServer):
+        _sftp.stat(settings, REMOTE)  # still remembered
+    assert _sftp.stat(settings, REMOTE, use_cache=False)[0] == 3
+    _sftp.stat(settings, REMOTE)  # found again, so no longer remembered as missing
+    download(home / "x.h5")
+    assert (home / "x.h5").read_bytes() == b"new"
+
+
+def test_download_can_bypass_the_missing_file_memory(sftp_server, tmp_path, home):
+    with pytest.raises(_sftp.NotOnServer):
+        download(home / "x.h5")
+    path = tmp_path / "server" / Path(*REMOTE.parts)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"new")
+    _sftp.download(_config.settings(), REMOTE, home / "x.h5", use_cache=False)
+    assert (home / "x.h5").read_bytes() == b"new"
+
+
+def test_stat_of_a_denied_file(served):
+    served.denied.add(str(REMOTE))
+    with pytest.raises(TransferError, match="is denied"):
+        _sftp.stat(_config.settings(), REMOTE)
