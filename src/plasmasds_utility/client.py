@@ -224,8 +224,11 @@ class DataClient:
         a process with a warning, every one in the log file, and all of them in a
         summary at exit and in :func:`show_public_fallbacks`.
 
-        A local copy is returned after a single ``stat``, without contacting a
-        server.
+        A local private copy is returned after a single ``stat``, without
+        contacting a server. With the default, a local public copy is returned only
+        after the private server has been asked once per file and process, because
+        private data comes first; use ``private=False`` to skip that, for example
+        offline.
 
         Parameters
         ----------

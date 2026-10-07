@@ -1,11 +1,13 @@
 """A minimal SFTP server for the tests, serving files from a local directory.
 
 Paths from the client are taken relative to that directory, like an SSH user's home.
-It accepts one user with one public key, counts connections, and can be told to
-drop the first connections, to deny access to paths (or only opening them), or to
-report a larger size than a file has (which makes a download look truncated).
+It accepts one user with one public key, counts connections and stat requests, and
+can be told to drop the first connections, to deny access to paths (or only opening
+them), or to report a larger size than a file has (which makes a download look
+truncated).
 """
 
+import collections
 import os
 import socket
 import threading
@@ -46,6 +48,7 @@ class _SFTP(SFTPServerInterface):
         return os.path.join(self.stub.root, path.lstrip("/"))
 
     def stat(self, path):
+        self.stub.stats[path] += 1
         if path in self.stub.denied:
             return paramiko.SFTP_PERMISSION_DENIED
         try:
@@ -82,6 +85,7 @@ class StubSFTPServer:
         self.fail_connections = 0
         self.denied = set()
         self.denied_open = set()  # stat works, open is refused
+        self.stats = collections.Counter()  # stat requests per path
         self.extra_size = {}
         self._transports = []
         self._socket = socket.socket()

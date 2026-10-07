@@ -14,7 +14,8 @@ one is used through the SSH agent.
 Failures that retrying cannot fix (a host key mismatch, an unknown host, a rejected or
 missing key, a key with a passphrase that is not in the agent) raise
 :class:`AuthError` and are remembered until Python (or the Python kernel) restarts, so
-later calls fail at once instead of trying again; the messages say so.
+later calls fail at once instead of trying again; the messages say so. A file found
+missing on the server is remembered the same way, so asking again costs nothing.
 
 One SFTP transfer runs at a time per process; parallel calls take turns.
 """
@@ -37,6 +38,7 @@ class NotOnServer(TransferError):
 _lock = threading.Lock()
 _sessions = {}  # (host, port, user) -> (SSHClient, SFTPClient)
 _unavailable = {}  # (host, port, user) -> AuthError
+_not_on_server = set()  # ((host, port, user), remote path) known to be missing
 
 
 def _server(settings):
@@ -196,6 +198,7 @@ def close_all():
         for server in list(_sessions):
             _close(server)
         _unavailable.clear()
+        _not_on_server.clear()
 
 
 atexit.register(close_all)
@@ -235,8 +238,9 @@ def download(settings, remote, target, *, timeout=30, attempts=3, backoff=1.0):
         no key is found. Remembered until Python restarts: later calls for the
         same server raise it again without connecting.
     TransferError
-        If the file is not on the server, access to it is denied, or the download
-        still fails after the last attempt.
+        If the file is not on the server (``NotOnServer``; remembered until Python
+        restarts), access to it is denied, or the download still fails after the
+        last attempt.
     ConfigError
         If the configured SSH key is missing, or a host key setting is invalid.
     PathError
@@ -249,6 +253,8 @@ def download(settings, remote, target, *, timeout=30, attempts=3, backoff=1.0):
             if server in _unavailable:
                 # A fresh traceback each time, or the cached one grows per call.
                 raise _unavailable[server].with_traceback(None)
+            if (server, str(remote)) in _not_on_server:
+                raise NotOnServer(f"{remote} is not on the private server")
             locked_key = None
             try:
                 if server not in _sessions:
@@ -257,6 +263,9 @@ def download(settings, remote, target, *, timeout=30, attempts=3, backoff=1.0):
                     locked_key = key_path if locked else None
                     _sessions[server] = _connect(settings, timeout, key)
                 _fetch(_sessions[server][1], remote, target)
+            except NotOnServer:
+                _not_on_server.add((server, str(remote)))
+                raise
             except (paramiko.SSHException, OSError, EOFError) as error:
                 auth_error = _auth_error(error, settings, locked_key)
                 if auth_error is not None:

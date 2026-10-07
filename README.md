@@ -33,7 +33,8 @@ path = data.get("atomic_data/Na/rates.h5")  # local path; downloaded if missing
 3. the local public copy;
 4. the file on the public server, downloaded over HTTPS.
 
-A local copy is returned straight away, without contacting a server.
+A local private copy is returned straight away, without contacting a server.
+A local public copy is returned once the private server has been asked for the file, at most once per file and session, because private data comes first; `private=False` skips that (for example offline).
 Downloads are written to a temporary file and moved into place only when complete, and the local file keeps the server's modification time.
 
 To choose the source, pass `private`:

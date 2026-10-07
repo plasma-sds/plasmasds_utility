@@ -469,6 +469,14 @@ def test_get_falls_back_to_the_local_public_copy(servers, caplog):
     assert servers.public_requests() == 0
 
 
+def test_local_public_copy_asks_the_private_server_once(servers):
+    client = DataClient("renate-od")
+    place(client.local_path("a.h5", private=False), b"dummy")
+    for _ in range(3):
+        assert client.get("a.h5").read_bytes() == b"dummy"
+    assert servers.sftp.stats["private_html/renate-od/a.h5"] == 1
+
+
 def test_get_falls_back_to_a_public_download(servers):
     servers.put_public("a.h5", b"dummy")
     client = DataClient("renate-od")

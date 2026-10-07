@@ -80,7 +80,23 @@ def test_missing_file_is_not_retried(sftp_server, home, sleeps):
     assert sleeps == []
 
 
-def test_missing_file_is_not_remembered(served, tmp_path, home):
+def test_missing_file_is_remembered(sftp_server, home):
+    for _ in range(3):
+        with pytest.raises(TransferError, match="is not on the private server"):
+            download(home / "x.h5")
+    assert sftp_server.stats[str(REMOTE)] == 1  # asked once per process
+
+
+def test_close_all_forgets_missing_files(sftp_server, home):
+    with pytest.raises(TransferError):
+        download(home / "x.h5")
+    _sftp.close_all()
+    with pytest.raises(TransferError):
+        download(home / "x.h5")
+    assert sftp_server.stats[str(REMOTE)] == 2
+
+
+def test_missing_file_does_not_block_the_server(served, tmp_path, home):
     with pytest.raises(TransferError):
         _sftp.download(_config.settings(), REMOTE.with_name("y.h5"), home / "y.h5")
     download(home / "x.h5")  # the server is still usable
