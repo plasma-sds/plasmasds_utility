@@ -111,7 +111,7 @@ def home(tmp_path, monkeypatch):
     for variable in ENV_VARIABLES:
         monkeypatch.delenv(variable, raising=False)
     monkeypatch.setattr(_config, "_settings", None)
-    monkeypatch.setattr(client, "_public_warned", set())
+    monkeypatch.setattr(client, "_fallbacks", {})
     yield home
     _sftp.close_all()
     # Close the log file, or Windows cannot delete the temporary directory.

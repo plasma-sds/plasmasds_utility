@@ -1,6 +1,8 @@
 """The public entry point: one :class:`DataClient` per client package."""
 
+import atexit
 import re
+import sys
 from pathlib import Path
 
 from plasmasds_utility import _config, _https, _paths, _sftp
@@ -9,8 +11,65 @@ from plasmasds_utility.exceptions import AuthError, PathError, TransferError
 _PREFIX = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 # On Windows these files share a directory with the client directories.
 _RESERVED = {_config.CONFIG_FILE, _config.LOG_FILE}
-# (prefix, key) pairs already warned about using their public copy.
-_public_warned = set()
+# (prefix, key) -> reason, for files that came from public data in a fallback.
+_fallbacks = {}
+
+
+def _record_fallback(prefix, key, reason, path):
+    """Note that get() fell back to public data, and announce it."""
+    if (prefix, key) in _fallbacks:
+        return
+    first = not _fallbacks
+    _fallbacks[(prefix, key)] = str(reason)
+    _config.logger.info(
+        "using the public copy of %r for %s (%s): %s", key, prefix, reason, path
+    )
+    if first:
+        _config.logger.warning(
+            "using public data instead of private data for %r (%s); further cases "
+            "are only logged in %s and listed at exit, or by "
+            "plasmasds_utility.show_public_fallbacks()",
+            key,
+            reason,
+            _config.log_dir() / _config.LOG_FILE,
+        )
+
+
+def _fallback_summary():
+    """Return the text listing the fallbacks of this process."""
+    if not _fallbacks:
+        return "All files came from the source asked for; no public fallbacks."
+    lines = [
+        f"{len(_fallbacks)} file(s) came from the public server instead of the "
+        "private one:"
+    ]
+    lines += [
+        f"  {prefix}: {key} ({reason})" for (prefix, key), reason in _fallbacks.items()
+    ]
+    return "\n".join(lines)
+
+
+def show_public_fallbacks():
+    """Print the files that ``get`` took from public data instead of private data.
+
+    Lists, for this process, every file for which :meth:`DataClient.get` with the
+    default ``private=None`` fell back to public data, with the reason. The log
+    file keeps the same information for every process.
+
+    Examples
+    --------
+    >>> import plasmasds_utility
+    >>> plasmasds_utility.show_public_fallbacks()  # doctest: +SKIP
+    1 file(s) came from the public server instead of the private one:
+      renate-od: atomic_data/Na/rates.h5 (no SSH key found ...)
+    """
+    print(_fallback_summary())
+
+
+@atexit.register
+def _summary_at_exit():
+    if _fallbacks:
+        print(f"plasmasds_utility: {_fallback_summary()}", file=sys.stderr)
 
 
 def _present(path, key):
@@ -145,7 +204,7 @@ class DataClient:
         _paths.check_key(key)  # before any I/O
         return _paths.local_path(self.client_dir(), key, private=private)
 
-    def get(self, key):
+    def get(self, key, *, private=None):
         """Return the local path of a data file, downloading it if it is missing.
 
         Looks in this order and returns the first file found:
@@ -155,13 +214,15 @@ class DataClient:
         3. the local public copy;
         4. the public server, over HTTPS, downloading into the public copy.
 
-        Step 2 is skipped when private data is not available to you (no SSH key,
-        key rejected, unknown or mismatching host key), which is remembered for
-        the rest of the process, or when the file is not on the private server.
-        Any other failure of the private server, such as a timeout, raises
-        :class:`TransferError` instead, so public data never silently replaces
-        private data. Returning public data logs a warning, once per key and
-        process.
+        ``private`` selects the sources: True uses only 1 and 2, False only 3 and
+        4, and None (the default) all four. With None, steps 1 and 2 give way to
+        public data only when private data is not available to you (no SSH key,
+        key rejected, unknown or mismatching host key; remembered for the rest of
+        the process) or the file is not on the private server. Any other failure
+        of the private server, such as a timeout, raises, so public data never
+        silently replaces private data. Such a fallback is announced: the first in
+        a process with a warning, every one in the log file, and all of them in a
+        summary at exit and in :func:`show_public_fallbacks`.
 
         A local copy is returned after a single ``stat``, without contacting a
         server.
@@ -170,6 +231,9 @@ class DataClient:
         ----------
         key : str
             The data key (see :meth:`local_path`).
+        private : bool or None, default None
+            True for private data only, False for public data only (the private
+            server is never contacted), None for the best available.
 
         Returns
         -------
@@ -180,38 +244,43 @@ class DataClient:
         ------
         PathError
             If the key is invalid, or something other than a file is in the way.
+        AuthError
+            With ``private=True``, if private data is not available to you.
         TransferError
-            If the private server fails for a reason other than those above, or the
-            file is on neither server.
+            If the private server fails, other than by the fallbacks above, or the
+            file is not on the servers that were tried.
         ConfigError
             As for :meth:`client_dir`, or if the configured SSH key is missing or
             unreadable.
         """
-        private = self.local_path(key, private=True)
-        if _present(private, key):
-            return private
         settings = _config.settings()
-        remote = _paths.private_remote(settings, self.prefix, key)
-        try:
-            return _sftp.download(settings, remote, private)
-        except (AuthError, _sftp.NotOnServer) as error:
-            reason = error
-        public = self.local_path(key, private=False)
-        if not _present(public, key):
+        reason = None
+        if private is not False:
+            private_path = self.local_path(key, private=True)
+            if _present(private_path, key):
+                return private_path
+            remote = _paths.private_remote(settings, self.prefix, key)
+            try:
+                return _sftp.download(settings, remote, private_path)
+            except (AuthError, _sftp.NotOnServer) as error:
+                if private:
+                    raise
+                reason = error
+        public_path = self.local_path(key, private=False)
+        if not _present(public_path, key):
             url = _paths.public_url(settings, self.prefix, key)
             try:
-                _https.download(url, public)
+                _https.download(url, public_path)
             except TransferError as error:
+                if reason is None:
+                    raise
                 raise TransferError(
                     f"cannot get {key!r}: not from the private server ({reason}), "
                     f"and not from the public server ({error})"
                 ) from error
-        if (self.prefix, key) not in _public_warned:
-            _public_warned.add((self.prefix, key))
-            _config.logger.warning(
-                "using the public copy of %r (%s): %s", key, reason, public
-            )
-        return public
+        if reason is not None:
+            _record_fallback(self.prefix, key, reason, public_path)
+        return public_path
 
     def set_working_dir(self, path):
         """Save the working directory for this client in the user configuration.
