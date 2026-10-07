@@ -147,3 +147,41 @@ def _run(url, action, verb, attempts, backoff):
     raise TransferError(
         f"cannot {verb} {url} after {attempts} attempts: {last_error}"
     ) from last_error
+
+
+def head(url, *, timeout=30, attempts=3, backoff=1.0):
+    """Return the size and modification time of a public file, without its content.
+
+    Sends an HTTP HEAD request and reads ``Content-Length`` and ``Last-Modified``;
+    the update check compares them with the local copy.
+
+    Parameters
+    ----------
+    url : str
+        The URL of the file.
+    timeout, attempts, backoff
+        As for :func:`download`.
+
+    Returns
+    -------
+    tuple
+        ``(size, mtime)``: the size in bytes and the POSIX modification time, each
+        None if the server does not send it (a warning is logged).
+
+    Raises
+    ------
+    TransferError
+        If the file is not on the public server (HTTP 404), or the request still
+        fails after the last attempt.
+    ValueError
+        If ``attempts`` is less than 1.
+    """
+
+    def ask():
+        request = urllib.request.Request(url, method="HEAD")
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            headers = response.headers
+        size = _content_length(headers, url)
+        return size, _server_time(headers.get("Last-Modified"), url)
+
+    return _run(url, ask, "check", attempts, backoff)
