@@ -20,6 +20,7 @@ The design and the decisions that amend it are in [issue #6](https://github.com/
 ## Getting data
 
 ```python
+import h5py
 from plasmasds_utility import DataClient
 
 data = DataClient("renate-od")

@@ -820,8 +820,9 @@ def test_failed_check_keeps_the_local_copy_and_raises(servers):
 def test_check_of_a_local_copy_missing_on_the_server_raises(servers):
     client = DataClient("renate-od")
     place(client.local_path("a.h5"), b"mine")
-    with pytest.raises(TransferError, match="not on the private server"):
+    with pytest.raises(TransferError, match="not on the private server") as error:
         client.get("a.h5", check_server=True)
+    assert "could not be checked" not in str(error.value)  # it was checked
     assert client.local_path("a.h5").read_bytes() == b"mine"
 
 
@@ -858,6 +859,7 @@ def test_check_updates_skips_temporary_and_hidden_files(servers, stat_calls):
     private = client.client_dir() / "private"
     place(private / ".a.h5.abc.part", b"x")
     place(private / ".hidden", b"x")
+    place(private / ".cache" / "x.h5", b"x")  # inside a hidden directory
     assert client.check_updates() == []
     assert stat_calls == []
 
@@ -911,6 +913,11 @@ def test_check_updates_continues_after_a_failing_file(servers, monkeypatch):
     with pytest.raises(TransferError, match=r"could not check 1 file(?s:.)*bad\.h5"):
         client.check_updates()
     assert client.local_path("good.h5", private=False).read_bytes() == b"new!"
+
+
+def test_a_file_vanishing_during_a_check_is_a_path_error(home):
+    with pytest.raises(PathError, match="cannot read"):
+        client_module._differs(home / "gone.h5", 1, 1)
 
 
 def test_check_updates_with_nothing_local(servers, capsys):

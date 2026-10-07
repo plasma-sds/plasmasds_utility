@@ -105,7 +105,10 @@ def _differs(path, size, mtime):
     It does if the sizes differ, or the server copy is newer in whole seconds;
     unknown server values are not compared.
     """
-    local = path.stat()
+    try:
+        local = path.stat()
+    except OSError as error:  # removed or replaced while being checked
+        raise PathError(f"cannot read {path}: {error}") from error
     if size is not None and size != local.st_size:
         return True
     return mtime is not None and int(mtime) > int(local.st_mtime)
@@ -139,6 +142,8 @@ def _refresh_public(url, path, force):
 
 def _kept(path, error):
     """Return the error for a requested check that could not be done."""
+    if isinstance(error, (_sftp.NotOnServer, _https.NotOnServer)):
+        return TransferError(f"kept the local copy {path}: {error}")
     return TransferError(
         f"kept the local copy {path}, but the server could not be checked: {error}"
     )
@@ -399,8 +404,11 @@ class DataClient:
         compares each file with its server (modification time and size), as
         ``get(key, check_server=True)`` does, downloading it again where the server
         copy is newer or differs in size. Temporary and hidden files are skipped,
-        and so is a file whose name is not a valid key (with a warning).
+        including anything inside a hidden directory, and so is a file whose name
+        is not a valid key (with a warning).
 
+        It sends one request per file (an SFTP ``stat``, one at a time, or an
+        HTTPS ``HEAD``), so a tree of many thousands of files takes a while.
         Unlike a single ``get``, a file missing on its server is kept with a
         warning, and the other files are still checked. If private data is not
         available to you, the ``private/`` tree is not checked further. At the
@@ -433,7 +441,10 @@ class DataClient:
                 else []
             )
             for path in files:
-                if path.name.startswith(".") or path.name.endswith(".part"):
+                parts = path.relative_to(tree).parts
+                if any(part.startswith(".") for part in parts) or path.name.endswith(
+                    ".part"
+                ):
                     continue
                 key = path.relative_to(tree).as_posix()
                 try:
@@ -458,7 +469,7 @@ class DataClient:
                 except (_sftp.NotOnServer, _https.NotOnServer) as error:
                     missing.append(key)
                     _config.logger.warning("kept %s: %s", path, error)
-                except TransferError as error:
+                except (TransferError, PathError) as error:
                     failed.append((key, error))
                     _config.logger.warning("cannot check %s: %s", path, error)
                 else:

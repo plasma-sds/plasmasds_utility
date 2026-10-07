@@ -216,7 +216,8 @@ def test_unusable_target_directory_is_a_path_error(home):
 
 def test_attempts_must_be_positive(home):
     with pytest.raises(ValueError, match="attempts must be at least 1"):
-        _https.download("https://example.invalid/a", home / "a", attempts=0)
+        _https.download("https://example.invalid/a", home / "new" / "a", attempts=0)
+    assert not (home / "new").exists()  # checked before any I/O
 
 
 def test_head_returns_size_and_mtime(http_server):

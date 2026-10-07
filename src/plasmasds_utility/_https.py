@@ -107,6 +107,8 @@ def download(url, target, *, timeout=30, attempts=3, backoff=1.0):
     TransferError
         If the download fails; the message names the URL and the reason.
     """
+    if attempts < 1:  # before any I/O
+        raise ValueError(f"attempts must be at least 1, got {attempts}")
     _files.make_parent(target)
     _run(url, lambda: _fetch_once(url, target, timeout), "download", attempts, backoff)
     logger.info("downloaded %s to %s", url, target)
@@ -122,7 +124,7 @@ def _run(url, action, verb, attempts, backoff):
     if attempts < 1:
         raise ValueError(f"attempts must be at least 1, got {attempts}")
     if not url.startswith("https://"):
-        logger.warning("%s over an unencrypted connection: %s", verb, url)
+        logger.warning("using an unencrypted connection for %s", url)
     for attempt in range(1, attempts + 1):
         try:
             return action()
