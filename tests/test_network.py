@@ -15,7 +15,7 @@ import time
 import pytest
 
 import plasmasds_utility
-from plasmasds_utility import AuthError, DataClient, _config, _sftp
+from plasmasds_utility import DataClient
 
 # renate's own access-test files, unchanged since 2018.
 PUBLIC_KEY = "test_dataset/access_tests/public_test.txt"
@@ -27,12 +27,8 @@ SSH_KEY = os.path.expanduser(os.environ.get("PLASMASDS_TEST_SSH_KEY", ""))
 
 @pytest.mark.network
 def test_public_download_from_the_data_server(home):
-    # Test the public route only, as for a user without a key, without SSH.
-    settings = _config.settings()
-    server = (settings["host"], settings["port"], settings["user"])
-    _sftp._unavailable[server] = AuthError("no key in this test")
     client = DataClient("renate-od", working_dir=home / "data")
-    path = client.get(PUBLIC_KEY)
+    path = client.get(PUBLIC_KEY, private=False)  # no SSH involved
     assert path == client.local_path(PUBLIC_KEY, private=False)
     assert path.read_bytes() == b"Data access test file"
     assert path.stat().st_mtime == 1519422481  # Last-Modified: 2018-02-23 21:48:01 UTC
@@ -44,7 +40,7 @@ def test_private_download_from_the_data_server(home):
         pytest.skip("set PLASMASDS_TEST_SSH_KEY to a key for the private data server")
     plasmasds_utility.set_ssh_key(SSH_KEY)
     client = DataClient("renate-od", working_dir=home / "data")
-    path = client.get(PRIVATE_KEY)
+    path = client.get(PRIVATE_KEY, private=True)
     assert path == client.local_path(PRIVATE_KEY, private=True)
     assert path.stat().st_size == 21
     assert time.gmtime(path.stat().st_mtime)[:3] == (2018, 2, 23)
