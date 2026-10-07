@@ -19,6 +19,7 @@ from plasmasds_utility import (
     PathError,
     TransferError,
     _config,
+    _https,
     _sftp,
 )
 
@@ -829,3 +830,105 @@ def test_check_server_finds_a_file_uploaded_during_the_session(servers):
     servers.put_private("a.h5", b"real")
     assert client.get("a.h5").read_bytes() == b"dummy"  # remembered as missing
     assert client.get("a.h5", check_server=True).read_bytes() == b"real"
+
+
+def test_check_updates_updates_newer_files_in_both_trees(servers, capsys):
+    servers.put_private("p/new.h5", b"new!", mtime=NEW)
+    servers.put_private("p/same.h5", b"same", mtime=OLD)
+    servers.put_public("q/new.h5", b"new!", mtime=NEW)
+    client = DataClient("renate-od")
+    place_at(client.local_path("p/new.h5"), b"old!", OLD)
+    place_at(client.local_path("p/same.h5"), b"same", OLD)
+    place_at(client.local_path("q/new.h5", private=False), b"old!", OLD)
+    updated = client.check_updates()
+    assert sorted(updated) == sorted(
+        [client.local_path("p/new.h5"), client.local_path("q/new.h5", private=False)]
+    )
+    assert client.local_path("p/new.h5").read_bytes() == b"new!"
+    assert client.local_path("p/same.h5").read_bytes() == b"same"
+    out = capsys.readouterr().out
+    assert "checked 3 file(s) of renate-od: 2 updated, 0 not on the server" in out
+    assert "public server instead of the private one" not in out
+
+
+def test_check_updates_skips_temporary_and_hidden_files(servers, stat_calls):
+    client = DataClient("renate-od")
+    private = client.client_dir() / "private"
+    place(private / ".a.h5.abc.part", b"x")
+    place(private / ".hidden", b"x")
+    assert client.check_updates() == []
+    assert stat_calls == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows cannot create such a file")
+def test_check_updates_skips_invalid_names(servers, caplog, stat_calls):
+    client = DataClient("renate-od")
+    place(client.client_dir() / "private" / "con.h5", b"x")
+    with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
+        assert client.check_updates() == []
+    assert "skipping" in caplog.text
+    assert stat_calls == []
+
+
+def test_check_updates_keeps_files_missing_on_the_server(servers, capsys, caplog):
+    client = DataClient("renate-od")
+    place(client.local_path("gone.h5"), b"mine")
+    with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
+        assert client.check_updates() == []
+    assert client.local_path("gone.h5").read_bytes() == b"mine"
+    assert "not on the private server" in caplog.text
+    assert "1 not on the server" in capsys.readouterr().out
+
+
+def test_check_updates_without_a_key_checks_public_and_raises(servers):
+    write_config(
+        host="127.0.0.1",
+        port=servers.sftp.port,
+        host_keys=_config.settings()["host_keys"],
+        public_url=servers.http.url("/~data"),
+    )
+    servers.put_public("q.h5", b"new!", mtime=NEW)
+    client = DataClient("renate-od")
+    place_at(client.local_path("q.h5", private=False), b"old!", OLD)
+    place(client.local_path("a.h5"), b"mine")
+    place(client.local_path("b.h5"), b"mine")
+    with pytest.raises(TransferError, match="could not check 1 file") as error:
+        client.check_updates()
+    assert "no SSH key found" in str(error.value)
+    assert client.local_path("q.h5", private=False).read_bytes() == b"new!"
+    assert servers.sftp.connections == 1  # the private tree stopped at once
+
+
+def test_check_updates_continues_after_a_failing_file(servers, monkeypatch):
+    monkeypatch.setattr(_https, "time", types.SimpleNamespace(sleep=lambda s: None))
+    servers.http.serve("/~data/renate-od/bad.h5", {"status": 500})
+    servers.put_public("good.h5", b"new!", mtime=NEW)
+    client = DataClient("renate-od")
+    place_at(client.local_path("bad.h5", private=False), b"old!", OLD)
+    place_at(client.local_path("good.h5", private=False), b"old!", OLD)
+    with pytest.raises(TransferError, match=r"could not check 1 file(?s:.)*bad\.h5"):
+        client.check_updates()
+    assert client.local_path("good.h5", private=False).read_bytes() == b"new!"
+
+
+def test_check_updates_with_nothing_local(servers, capsys):
+    assert DataClient("renate-od").check_updates() == []
+    assert "checked 0 file(s)" in capsys.readouterr().out
+
+
+def test_check_updates_gives_no_notice(servers, caplog):
+    servers.put_private("a.h5", b"same", mtime=OLD)
+    client = DataClient("renate-od")
+    place_at(client.local_path("a.h5"), b"same", OLD)
+    with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
+        client.check_updates()
+    assert notices(caplog) == []
+
+
+def test_check_updates_prints_the_fallback_summary_after_fallbacks(servers, capsys):
+    servers.put_public("a.h5")
+    client = DataClient("renate-od")
+    client.get("a.h5")  # a fallback to public data
+    capsys.readouterr()
+    client.check_updates()
+    assert "1 file(s) came from the public server" in capsys.readouterr().out

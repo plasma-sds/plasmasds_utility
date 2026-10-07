@@ -386,6 +386,93 @@ class DataClient:
             _record_fallback(self.prefix, key, reason, public_path)
         return public_path
 
+    def check_updates(self):
+        """Check every local data file against its server and download newer ones.
+
+        Walks the local ``public/`` and ``private/`` trees of this client and
+        compares each file with its server (modification time and size), as
+        ``get(key, check_server=True)`` does, downloading it again where the server
+        copy is newer or differs in size. Temporary and hidden files are skipped,
+        and so is a file whose name is not a valid key (with a warning).
+
+        Unlike a single ``get``, a file missing on its server is kept with a
+        warning, and the other files are still checked. If private data is not
+        available to you, the ``private/`` tree is not checked further. At the
+        end a short report is printed, followed by the public-fallback summary if
+        there were fallbacks in this process.
+
+        Returns
+        -------
+        list of pathlib.Path
+            The files that were downloaded again.
+
+        Raises
+        ------
+        TransferError
+            After the whole check, if any file could not be checked; the message
+            lists them. Files that could be checked are already updated.
+        ConfigError
+            As for :meth:`client_dir`, or if the configured SSH key is missing or
+            unreadable.
+        """
+        settings = _config.settings()
+        base = self.client_dir()
+        updated, missing, failed = [], [], []
+        checked = 0
+        for private in (False, True):
+            tree = base / ("private" if private else "public")
+            files = (
+                sorted(p for p in tree.rglob("*") if p.is_file())
+                if tree.is_dir()
+                else []
+            )
+            for path in files:
+                if path.name.startswith(".") or path.name.endswith(".part"):
+                    continue
+                key = path.relative_to(tree).as_posix()
+                try:
+                    _paths.check_key(key)
+                except PathError as error:
+                    _config.logger.warning("skipping %s: %s", path, error)
+                    continue
+                checked += 1
+                try:
+                    if private:
+                        remote = _paths.private_remote(settings, self.prefix, key)
+                        changed = _refresh_private(settings, remote, path, False)
+                    else:
+                        url = _paths.public_url(settings, self.prefix, key)
+                        changed = _refresh_public(url, path, False)
+                except AuthError as error:
+                    failed.append((key, error))
+                    _config.logger.warning(
+                        "cannot check the private data of %s: %s", self.prefix, error
+                    )
+                    break
+                except (_sftp.NotOnServer, _https.NotOnServer) as error:
+                    missing.append(key)
+                    _config.logger.warning("kept %s: %s", path, error)
+                except TransferError as error:
+                    failed.append((key, error))
+                    _config.logger.warning("cannot check %s: %s", path, error)
+                else:
+                    if changed:
+                        updated.append(path)
+                        _config.logger.info("updated %s", path)
+        print(
+            f"plasmasds_utility: checked {checked} file(s) of {self.prefix}: "
+            f"{len(updated)} updated, {len(missing)} not on the server, "
+            f"{len(failed)} could not be checked"
+        )
+        if _fallbacks:
+            print(_fallback_summary())
+        if failed:
+            lines = "\n".join(f"  {key}: {error}" for key, error in failed)
+            raise TransferError(
+                f"could not check {len(failed)} file(s) of {self.prefix}:\n{lines}"
+            )
+        return updated
+
     def set_working_dir(self, path):
         """Save the working directory for this client in the user configuration.
 
