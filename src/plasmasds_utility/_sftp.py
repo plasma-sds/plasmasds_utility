@@ -155,6 +155,9 @@ def _auth_error(error, settings, locked_key):
             f"and {_RESTART}; otherwise do not connect: someone may be "
             "impersonating the server"
         )
+    # paramiko signals "no key at all" and "unknown host" only with a plain
+    # SSHException, so these two cases are told apart by its message text; the
+    # tests would catch a change of wording in a new paramiko release.
     login_failed = isinstance(error, paramiko.AuthenticationException) or (
         isinstance(error, paramiko.SSHException)
         and "No authentication methods available" in str(error)
@@ -253,8 +256,12 @@ def download(settings, remote, target, *, timeout=30, attempts=3, backoff=1.0):
     ConfigError
         If the configured SSH key is missing, or a host key setting is invalid.
     PathError
-        If the target directory cannot be created.
+        If the target directory cannot be created or the file cannot be written.
+    ValueError
+        If ``attempts`` is less than 1.
     """
+    if attempts < 1:
+        raise ValueError(f"attempts must be at least 1, got {attempts}")
     server = _server(settings)
     _files.make_parent(target)
     for attempt in range(1, attempts + 1):

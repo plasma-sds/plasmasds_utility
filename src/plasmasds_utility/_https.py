@@ -97,10 +97,14 @@ def download(url, target, *, timeout=30, attempts=3, backoff=1.0):
     Raises
     ------
     PathError
-        If the target directory cannot be created.
+        If the target directory cannot be created or the file cannot be written.
+    ValueError
+        If ``attempts`` is less than 1.
     TransferError
         If the download fails; the message names the URL and the reason.
     """
+    if attempts < 1:
+        raise ValueError(f"attempts must be at least 1, got {attempts}")
     _files.make_parent(target)
     if not url.startswith("https://"):
         logger.warning("downloading over an unencrypted connection: %s", url)

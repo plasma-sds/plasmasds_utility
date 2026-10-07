@@ -442,3 +442,8 @@ def test_shipped_host_key_parses_for_a_non_standard_port():
     entry = paramiko.hostkeys.HostKeyEntry.from_line(f"{name} {line}")
     assert entry.key.get_name() == "ssh-ed25519"
     assert _sftp._host_name("example.org", 22) == "example.org"
+
+
+def test_attempts_must_be_positive(home):
+    with pytest.raises(ValueError, match="attempts must be at least 1"):
+        download(home / "x.h5", attempts=0)
