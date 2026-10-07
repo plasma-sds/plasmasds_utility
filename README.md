@@ -65,12 +65,13 @@ By default, a local copy is used without asking the server whether it has a newe
 To check:
 
 ```python
-data.get(key, check_server=True)  # download again if the server copy differs
-data.get(key, force=True)  # download again regardless (a corrupted local copy)
+data.get(key, check_server=True)  # download again if the server copy is newer
+data.get(key, check_server=True, force=True)  # download again regardless
 data.check_updates()  # check every local file of this client
 ```
 
-The check compares modification time and size, from the local file and from the server (SFTP for private data, an HTTPS `HEAD` request for public data), and downloads again when the server copy is newer or differs in size.
+The check compares the modification time of the local file with the server's (SFTP for private data, an HTTPS `HEAD` request for public data) and downloads again only when the server copy is newer.
+A local copy that is not older but differs in size is kept, with a warning that it may be damaged; `force=True` replaces it.
 `check_updates()` covers both the private and the public copies.
 `check_updates()` prints a short report and returns the files it downloaded again; a file missing on the server is kept with a warning.
 
