@@ -99,42 +99,52 @@ def _notice_unchecked(prefix):
     print(f"plasmasds_utility: {text}", file=sys.stderr)
 
 
-def _differs(path, size, mtime):
-    """Return whether the server copy (size, mtime) differs from the local file.
+def _newer(path, size, mtime):
+    """Return whether the server copy (size, mtime) is newer than the local file.
 
-    It does if the sizes differ, or the server copy is newer in whole seconds;
-    unknown server values are not compared.
+    Newer means a later modification time in whole seconds; an unknown server time
+    is never newer. A copy that is not newer but differs in size is kept, with a
+    warning that it may be damaged.
     """
     try:
         local = path.stat()
     except OSError as error:  # removed or replaced while being checked
         raise PathError(f"cannot read {path}: {error}") from error
-    if size is not None and size != local.st_size:
+    if mtime is not None and int(mtime) > int(local.st_mtime):
         return True
-    return mtime is not None and int(mtime) > int(local.st_mtime)
+    if size is not None and size != local.st_size:
+        _config.logger.warning(
+            "%s differs in size from the server copy (%d bytes here, %d there) "
+            "although the server copy is not newer; it may be damaged: replace it "
+            "with get(key, check_server=True, force=True)",
+            path,
+            local.st_size,
+            size,
+        )
+    return False
 
 
 def _refresh_private(settings, remote, path, force):
-    """Download the private copy if the server differs, or always if forced.
+    """Download the private copy if the server copy is newer, or always if forced.
 
     Returns whether the file was downloaded.
     """
     if not force:
         size, mtime = _sftp.stat(settings, remote, use_cache=False)
-        if not _differs(path, size, mtime):
+        if not _newer(path, size, mtime):
             return False
     _sftp.download(settings, remote, path, use_cache=False)
     return True
 
 
 def _refresh_public(url, path, force):
-    """Download the public copy if the server differs, or always if forced.
+    """Download the public copy if the server copy is newer, or always if forced.
 
     Returns whether the file was downloaded.
     """
     if not force:
         size, mtime = _https.head(url)
-        if not _differs(path, size, mtime):
+        if not _newer(path, size, mtime):
             return False
     _https.download(url, path)
     return True
@@ -309,10 +319,12 @@ class DataClient:
         By default a local copy is used without asking its server whether it has
         a newer version; the first time this happens for private data in a
         process, a notice says so. With ``check_server=True`` the local copy is
-        compared with its server (modification time and size) and downloaded
-        again if the server copy is newer or differs in size; with ``force=True``
-        it is downloaded again regardless, for example when it is corrupted. If a
-        requested check cannot be done, the local copy is kept and
+        compared with its server and downloaded again only if the server copy is
+        newer (modification time, whole seconds); a copy that is not newer but
+        differs in size is kept with a warning that it may be damaged. With
+        ``check_server=True, force=True`` it is downloaded again regardless, for
+        example when it is damaged. If a requested check cannot be done, the
+        local copy is kept and
         :class:`TransferError` is raised. Without a local copy, the private
         server is asked even about a file it was found not to have earlier in
         the process (with the default, that answer is remembered, so a local
@@ -328,9 +340,10 @@ class DataClient:
             server is never contacted), None for the best available.
         check_server : bool, default False
             Compare a local copy with its server and download it again if the
-            server copy is newer or differs in size.
+            server copy is newer.
         force : bool, default False
-            Download the file again even if a local copy exists.
+            With ``check_server=True``, download the file again even if the local
+            copy is up to date.
 
         Returns
         -------
@@ -339,6 +352,8 @@ class DataClient:
 
         Raises
         ------
+        ValueError
+            If ``force=True`` is given without ``check_server=True``.
         PathError
             If the key is invalid, something other than a file is in the way, or
             the file cannot be written.
@@ -352,8 +367,10 @@ class DataClient:
             As for :meth:`client_dir`, or if the configured SSH key is missing or
             unreadable.
         """
+        if force and not check_server:
+            raise ValueError("force=True can only be used with check_server=True")
         settings = _config.settings()
-        refresh = check_server or force
+        refresh = check_server
         reason = None
         if private is not False:
             private_path = self.local_path(key, private=True)
@@ -401,11 +418,10 @@ class DataClient:
         """Check every local data file against its server and download newer ones.
 
         Walks the local ``public/`` and ``private/`` trees of this client and
-        compares each file with its server (modification time and size), as
-        ``get(key, check_server=True)`` does, downloading it again where the server
-        copy is newer or differs in size. Temporary and hidden files are skipped,
-        including anything inside a hidden directory, and so is a file whose name
-        is not a valid key (with a warning).
+        compares each file with its server, as ``get(key, check_server=True)``
+        does, downloading it again where the server copy is newer. Temporary and
+        hidden files are skipped, including anything inside a hidden directory,
+        and so is a file whose name is not a valid key (with a warning).
 
         It sends one request per file (an SFTP ``stat``, one at a time, or an
         HTTPS ``HEAD``), so a tree of many thousands of files takes a while.

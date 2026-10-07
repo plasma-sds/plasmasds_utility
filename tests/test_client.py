@@ -750,8 +750,10 @@ def test_no_notice_for_downloads_or_public_copies(servers, capsys):
     ("server", "local", "downloaded"),
     [
         ((b"new!", NEW), (b"old!", OLD), True),  # server newer
+        ((b"longer", NEW), (b"old!", OLD), True),  # server newer, size differs
         ((b"same", OLD), (b"same", OLD), False),  # unchanged
-        ((b"longer", OLD), (b"old!", NEW), True),  # server older, size differs
+        ((b"longer", OLD), (b"old!", NEW), False),  # server older, size differs
+        ((b"longer", OLD), (b"old!", OLD), False),  # same time, size differs
         ((b"same", OLD), (b"mine", NEW), False),  # server older, same size
     ],
 )
@@ -770,7 +772,8 @@ def test_check_server_on_a_private_copy(servers, stat_calls, server, local, down
     [
         ((b"new!", NEW), (b"old!", OLD), True),
         ((b"same", OLD), (b"same", OLD), False),
-        ((b"longer", OLD), (b"old!", NEW), True),
+        ((b"longer", OLD), (b"old!", NEW), False),
+        ((b"longer", OLD), (b"old!", OLD), False),
     ],
 )
 def test_check_server_on_a_public_copy(servers, server, local, downloaded):
@@ -784,21 +787,45 @@ def test_check_server_on_a_public_copy(servers, server, local, downloaded):
     assert servers.http.requests["/~data/renate-od/a.h5"] == (1 if downloaded else 0)
 
 
+def test_size_difference_alone_warns_but_keeps_the_copy(servers, caplog):
+    servers.put_private("a.h5", b"longer", mtime=OLD)
+    client = DataClient("renate-od")
+    path = client.local_path("a.h5")
+    place_at(path, b"old!", OLD)
+    with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
+        client.get("a.h5", check_server=True)
+    assert path.read_bytes() == b"old!"
+    assert "differs in size from the server copy (4 bytes here, 6 there)" in (
+        caplog.text
+    )
+    assert "check_server=True, force=True" in caplog.text
+
+
 def test_force_downloads_a_private_copy_again(servers, stat_calls):
     servers.put_private("a.h5", b"good", mtime=OLD)
     client = DataClient("renate-od")
-    place_at(client.local_path("a.h5"), b"bad!", OLD)  # same size and time: corrupted
-    assert client.get("a.h5").read_bytes() == b"bad!"
-    assert client.get("a.h5", force=True).read_bytes() == b"good"
-    assert stat_calls == []  # no comparison
+    place_at(client.local_path("a.h5"), b"bad!", OLD)  # same size and time: damaged
+    assert client.get("a.h5", check_server=True).read_bytes() == b"bad!"
+    stat_calls.clear()
+    path = client.get("a.h5", check_server=True, force=True)
+    assert path.read_bytes() == b"good"
+    assert stat_calls == []  # no comparison, just the download
 
 
 def test_force_downloads_a_public_copy_again(servers):
     servers.put_public("a.h5", b"good", mtime=OLD)
     client = DataClient("renate-od")
     place_at(client.local_path("a.h5", private=False), b"bad!", OLD)
-    assert client.get("a.h5", private=False, force=True).read_bytes() == b"good"
+    path = client.get("a.h5", private=False, check_server=True, force=True)
+    assert path.read_bytes() == b"good"
     assert servers.http.requests["HEAD /~data/renate-od/a.h5"] == 0
+
+
+@pytest.mark.parametrize("private", [None, True, False])
+def test_force_without_check_server_is_an_error(home, private):
+    with pytest.raises(ValueError, match="force=True can only be used with"):
+        DataClient("renate-od").get("a.h5", private=private, force=True)
+    assert list(home.iterdir()) == []  # before any I/O
 
 
 def test_failed_check_keeps_the_local_copy_and_raises(servers):
@@ -838,10 +865,12 @@ def test_check_server_finds_a_file_uploaded_during_the_session(servers):
 def test_check_updates_updates_newer_files_in_both_trees(servers, capsys):
     servers.put_private("p/new.h5", b"new!", mtime=NEW)
     servers.put_private("p/same.h5", b"same", mtime=OLD)
+    servers.put_private("p/older.h5", b"longer", mtime=OLD)
     servers.put_public("q/new.h5", b"new!", mtime=NEW)
     client = DataClient("renate-od")
     place_at(client.local_path("p/new.h5"), b"old!", OLD)
     place_at(client.local_path("p/same.h5"), b"same", OLD)
+    place_at(client.local_path("p/older.h5"), b"mine", NEW)
     place_at(client.local_path("q/new.h5", private=False), b"old!", OLD)
     updated = client.check_updates()
     assert sorted(updated) == sorted(
@@ -849,8 +878,9 @@ def test_check_updates_updates_newer_files_in_both_trees(servers, capsys):
     )
     assert client.local_path("p/new.h5").read_bytes() == b"new!"
     assert client.local_path("p/same.h5").read_bytes() == b"same"
+    assert client.local_path("p/older.h5").read_bytes() == b"mine"  # not newer
     out = capsys.readouterr().out
-    assert "checked 3 file(s) of renate-od: 2 updated, 0 not on the server" in out
+    assert "checked 4 file(s) of renate-od: 2 updated, 0 not on the server" in out
     assert "public server instead of the private one" not in out
 
 
@@ -917,7 +947,7 @@ def test_check_updates_continues_after_a_failing_file(servers, monkeypatch):
 
 def test_a_file_vanishing_during_a_check_is_a_path_error(home):
     with pytest.raises(PathError, match="cannot read"):
-        client_module._differs(home / "gone.h5", 1, 1)
+        client_module._newer(home / "gone.h5", 1, 1)
 
 
 def test_check_updates_with_nothing_local(servers, capsys):
