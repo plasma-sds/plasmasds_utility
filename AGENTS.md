@@ -30,9 +30,9 @@ Decisions already made (do not re-open them without an owner):
   Nothing is ever written under `site-packages`.
 - Data is downloaded only when it is missing locally.
   By default the server is not checked if non-dummy data is present; the first use in a session prints a notice saying so, together with the command that checks for new data.
-  That check compares modification times and downloads when the server copy is newer.
-  Explicit flags override the default in both directions.
-  (Decided 2026-09-30.)
+  That check compares modification times and sizes and downloads when the server copy is newer or differs in size.
+  Explicit flags override the default: `get(key, check_server=True)` checks, `force=True` downloads again regardless, and `check_updates()` checks every local file.
+  (Decided 2026-09-30, refined 2026-10-07 on #15.)
 - Re-downloads triggered by a failed verification are bounded; they never loop.
 - Failures are loud and specific: package-specific exception classes, messages that say where the failure happened, and a rotating log file.
 
