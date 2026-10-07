@@ -389,6 +389,21 @@ def test_set_ssh_key_none_clears_it(key_file):
     assert _config.ssh_key() is None
 
 
+def test_set_ssh_key_takes_effect_without_a_restart(sftp_server, home):
+    settings = _config.settings()
+    write_config(
+        host="127.0.0.1", port=sftp_server.port, host_keys=settings["host_keys"]
+    )
+    path = sftp_server.key_file.parent.parent.parent / "server" / "private_html"
+    (path / "renate-od").mkdir(parents=True)
+    (path / "renate-od" / "a.h5").write_bytes(b"real")
+    client = DataClient("renate-od")
+    with pytest.raises(AuthError, match="no SSH key found"):
+        client.get("a.h5", private=True)
+    plasmasds_utility.set_ssh_key(sftp_server.key_file)
+    assert client.get("a.h5", private=True).read_bytes() == b"real"
+
+
 def test_set_ssh_key_logs_the_change(key_file):
     plasmasds_utility.set_ssh_key(key_file)
     text = (_config.log_dir() / _config.LOG_FILE).read_text("utf-8")

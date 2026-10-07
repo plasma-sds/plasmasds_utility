@@ -137,7 +137,7 @@ def _connect(settings, timeout, key):
 _RESTART = (
     "then restart Python (or the Python kernel), because this failure is "
     "remembered until then"
-)
+)  # follows "and"; set_ssh_key() needs no restart, as it forgets failures
 
 
 def _auth_error(error, settings, locked_key):
@@ -167,15 +167,15 @@ def _auth_error(error, settings, locked_key):
         )
     if isinstance(error, paramiko.AuthenticationException):
         return AuthError(
-            f"SSH login as {user}@{name} failed ({error}); check the key set with "
-            "plasmasds_utility.set_ssh_key(), or load a key with a passphrase into "
-            f"the SSH agent (ssh-add); {_RESTART}"
+            f"SSH login as {user}@{name} failed ({error}); set another key with "
+            "plasmasds_utility.set_ssh_key(), which takes effect at once, or load "
+            f"one into the SSH agent with ssh-add and {_RESTART}"
         )
     if login_failed:
         return AuthError(
             f"no SSH key found for {user}@{name}: set one with "
-            "plasmasds_utility.set_ssh_key(), or load it into the SSH agent "
-            f"(ssh-add); {_RESTART}"
+            "plasmasds_utility.set_ssh_key(), which takes effect at once, or load "
+            f"one into the SSH agent with ssh-add and {_RESTART}"
         )
     if isinstance(error, paramiko.SSHException) and "not found in known_hosts" in str(
         error
