@@ -260,10 +260,31 @@ def download(settings, remote, target, *, timeout=30, attempts=3, backoff=1.0):
     ValueError
         If ``attempts`` is less than 1.
     """
+    _files.make_parent(target)
+    _run(
+        settings,
+        remote,
+        lambda sftp: _fetch(sftp, remote, target),
+        "download",
+        timeout=timeout,
+        attempts=attempts,
+        backoff=backoff,
+    )
+    _config.logger.info("downloaded %s to %s", remote, target)
+    return target
+
+
+def _run(settings, remote, action, verb, *, timeout, attempts, backoff):
+    """Call action(sftp) on a session for settings, with bounded retries.
+
+    Opens or reuses the session, raises remembered failures at once, remembers
+    new AuthErrors and NotOnServer, and retries other connection failures with a
+    new session. ``verb`` names the operation in messages. Returns the result of
+    action.
+    """
     if attempts < 1:
         raise ValueError(f"attempts must be at least 1, got {attempts}")
     server = _server(settings)
-    _files.make_parent(target)
     for attempt in range(1, attempts + 1):
         with _lock:
             if server in _unavailable:
@@ -280,7 +301,7 @@ def download(settings, remote, target, *, timeout=30, attempts=3, backoff=1.0):
                     key, locked = _load_key(key_path)
                     locked_key = key_path if locked else None
                     _sessions[server] = _connect(settings, timeout, key)
-                _fetch(_sessions[server][1], remote, target)
+                return action(_sessions[server][1])
             except NotOnServer:
                 _not_on_server.add((server, str(remote)))
                 raise
@@ -292,11 +313,9 @@ def download(settings, remote, target, *, timeout=30, attempts=3, backoff=1.0):
                     raise auth_error from error
                 _close(server)
                 last_error = error
-            else:
-                _config.logger.info("downloaded %s to %s", remote, target)
-                return target
         _config.logger.warning(
-            "download of %s failed (attempt %d of %d): %s",
+            "%s of %s failed (attempt %d of %d): %s",
+            verb,
             remote,
             attempt,
             attempts,
@@ -305,7 +324,7 @@ def download(settings, remote, target, *, timeout=30, attempts=3, backoff=1.0):
         if attempt < attempts:
             time.sleep(backoff * 2 ** (attempt - 1))
     raise TransferError(
-        f"cannot download {remote} from {server[0]} after {attempts} attempts: "
+        f"cannot {verb} {remote} from {server[0]} after {attempts} attempts: "
         f"{last_error}"
     ) from last_error
 
