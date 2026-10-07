@@ -194,6 +194,20 @@ def test_unencrypted_url_logs_a_warning(http_server, home, caplog):
     assert "unencrypted connection" in caplog.text
 
 
+def test_local_write_failure_is_a_path_error_not_retried(
+    http_server, home, sleeps, monkeypatch
+):
+    http_server.serve("/a.txt", {"body": b"x"})
+
+    def refuse(*args, **kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(_files.tempfile, "mkstemp", refuse)
+    with pytest.raises(PathError, match="No space left on device"):
+        _https.download(http_server.url("/a.txt"), home / "a.txt")
+    assert sleeps == []
+
+
 def test_unusable_target_directory_is_a_path_error(home):
     (home / "file").write_text("x", encoding="utf-8")
     with pytest.raises(PathError, match="cannot create the directory"):

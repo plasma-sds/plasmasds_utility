@@ -43,6 +43,30 @@ def make_parent(target):
         ) from error
 
 
+def _local_error(target, error):
+    return PathError(f"cannot write {target}: {error}")
+
+
+class _LocalFile:
+    """The open temporary file, whose write errors become PathError.
+
+    So a full disk is not mistaken for a transfer error and retried.
+    """
+
+    def __init__(self, file, target):
+        self._file = file
+        self._target = target
+
+    def write(self, data):
+        try:
+            return self._file.write(data)
+        except OSError as error:
+            raise _local_error(self._target, error) from error
+
+    def tell(self):
+        return self._file.tell()
+
+
 @contextlib.contextmanager
 def writing(target):
     """Write target atomically.
@@ -54,6 +78,9 @@ def writing(target):
     removed and an existing target is left unchanged.
 
     A failure to set the timestamp only logs a warning: the content matters more.
+    Every other local failure (creating, writing, flushing or moving the file)
+    raises :class:`PathError`, which download retries do not catch: a full disk or
+    an unwritable directory is not a transfer error.
 
     Parameters
     ----------
@@ -63,21 +90,28 @@ def writing(target):
     Yields
     ------
     object
-        With attributes ``file`` (the open binary file) and ``mtime`` (None, or a
-        POSIX timestamp to set).
+        With attributes ``file`` (with ``write`` and ``tell``) and ``mtime``
+        (None, or a POSIX timestamp to set).
 
     Raises
     ------
-    OSError
-        If the temporary file cannot be created or moved into place.
+    PathError
+        If the file cannot be created, written or moved into place.
     """
-    fd, temporary = tempfile.mkstemp(
-        dir=target.parent, prefix=f".{target.name}.", suffix=".part"
-    )
+    try:
+        fd, temporary = tempfile.mkstemp(
+            dir=target.parent, prefix=f".{target.name}.", suffix=".part"
+        )
+    except OSError as error:
+        raise _local_error(target, error) from error
     try:
         with os.fdopen(fd, "wb") as file:
-            partial = _Partial(file)
+            partial = _Partial(_LocalFile(file, target))
             yield partial
+            try:
+                file.flush()
+            except OSError as error:
+                raise _local_error(target, error) from error
         if partial.mtime is not None:
             try:
                 os.utime(temporary, (partial.mtime, partial.mtime))
@@ -85,7 +119,10 @@ def writing(target):
                 logger.warning(
                     "cannot set the modification time of %s: %s", target, error
                 )
-        os.replace(temporary, target)
+        try:
+            os.replace(temporary, target)
+        except OSError as error:
+            raise _local_error(target, error) from error
     except BaseException:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(temporary)

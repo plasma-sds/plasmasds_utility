@@ -275,18 +275,34 @@ def download(settings, remote, target, *, timeout=30, attempts=3, backoff=1.0):
     ) from last_error
 
 
+def _server_file_error(remote, error):
+    """Return the error for a missing or forbidden server file, else None."""
+    if isinstance(error, FileNotFoundError):
+        return NotOnServer(f"{remote} is not on the private server")
+    if isinstance(error, PermissionError):
+        return TransferError(f"access to {remote} is denied on the private server")
+    return None
+
+
 def _fetch(sftp, remote, target):
-    """Download one file over an open SFTP channel."""
+    """Download one file over an open SFTP channel.
+
+    A missing or forbidden server file raises TransferError and local file problems
+    raise PathError; neither is retried. Other OSErrors are transfer failures.
+    """
     try:
         attributes = sftp.stat(str(remote))
-    except FileNotFoundError as error:
-        raise NotOnServer(f"{remote} is not on the private server") from error
-    except PermissionError as error:
-        raise TransferError(
-            f"access to {remote} is denied on the private server"
-        ) from error
+    except OSError as error:
+        if _server_file_error(remote, error) is None:
+            raise
+        raise _server_file_error(remote, error) from error
     with _files.writing(target) as partial:
-        received = sftp.getfo(str(remote), partial.file)
+        try:
+            received = sftp.getfo(str(remote), partial.file)
+        except OSError as error:  # opening the file can fail after stat worked
+            if _server_file_error(remote, error) is None:
+                raise
+            raise _server_file_error(remote, error) from error
         if received != attributes.st_size:
             raise ConnectionError(
                 f"transfer cut short: received {received} of {attributes.st_size} bytes"

@@ -8,7 +8,15 @@ import paramiko
 import pytest
 from conftest import FakeAgent, write_config
 
-from plasmasds_utility import AuthError, ConfigError, TransferError, _config, _sftp
+from plasmasds_utility import (
+    AuthError,
+    ConfigError,
+    PathError,
+    TransferError,
+    _config,
+    _files,
+    _sftp,
+)
 
 REMOTE = PurePosixPath("private_html/renate-od/a/x.h5")
 TIMESTAMP = 1519422481
@@ -82,6 +90,28 @@ def test_denied_file_is_not_retried(served, home, sleeps):
     served.denied.add(str(REMOTE))
     with pytest.raises(TransferError, match="access to .* is denied"):
         download(home / "x.h5")
+    assert sleeps == []
+
+
+def test_file_that_cannot_be_opened_is_not_retried(served, home, sleeps):
+    served.denied_open.add(str(REMOTE))  # stat works, open is refused
+    with pytest.raises(TransferError, match="access to .* is denied"):
+        download(home / "x.h5")
+    assert served.connections == 1
+    assert sleeps == []
+    assert leftovers(home) == []
+
+
+def test_local_write_failure_is_a_path_error_not_retried(
+    served, home, sleeps, monkeypatch
+):
+    def refuse(*args, **kwargs):
+        raise PermissionError("read-only directory")
+
+    monkeypatch.setattr(_files.tempfile, "mkstemp", refuse)
+    with pytest.raises(PathError, match=r"cannot write .*x\.h5: read-only"):
+        download(home / "x.h5")
+    assert served.connections == 1
     assert sleeps == []
 
 

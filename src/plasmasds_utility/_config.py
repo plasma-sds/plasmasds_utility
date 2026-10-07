@@ -37,7 +37,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from plasmasds_utility import _files
-from plasmasds_utility.exceptions import ConfigError
+from plasmasds_utility.exceptions import ConfigError, PathError
 
 _APP = "plasmasds"
 _WINDOWS = os.name == "nt"
@@ -322,6 +322,8 @@ def _write_user(path, data):
     text = json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
     try:
         _write_atomic(path, text)
+    except PathError as error:  # from _files.writing; already names the file
+        raise ConfigError(str(error)) from error
     except OSError as error:
         raise ConfigError(f"cannot write {path}: {error}") from error
     _settings = None

@@ -1,4 +1,5 @@
 import logging
+import os
 
 import pytest
 
@@ -42,6 +43,61 @@ def test_failure_keeps_the_old_file_and_no_temporary(home):
         raise RuntimeError("interrupted")
     assert target.read_bytes() == b"old"
     assert leftovers(home) == []
+
+
+class FullDisk:
+    """A file object whose writes fail like a full disk."""
+
+    def __init__(self, fd, mode):
+        os.close(fd)
+
+    def write(self, data):
+        raise OSError(28, "No space left on device")
+
+    def tell(self):
+        return 0
+
+    def flush(self):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def test_write_failure_is_a_path_error_and_leaves_nothing(home, monkeypatch):
+    monkeypatch.setattr(_files.os, "fdopen", FullDisk)
+    target = home / "a.bin"
+    target.write_bytes(b"old")
+    with pytest.raises(PathError, match=r"cannot write .*No space left"):
+        with _files.writing(target) as partial:
+            partial.file.write(b"data")
+    assert target.read_bytes() == b"old"
+    assert leftovers(home) == []
+
+
+def test_failed_move_is_a_path_error_and_leaves_nothing(home, monkeypatch):
+    def refuse(*args):
+        raise PermissionError("target is locked")
+
+    monkeypatch.setattr(_files.os, "replace", refuse)
+    target = home / "a.bin"
+    with pytest.raises(PathError, match="target is locked"):
+        with _files.writing(target) as partial:
+            partial.file.write(b"data")
+    assert leftovers(home) == []
+
+
+def test_failed_create_is_a_path_error(home, monkeypatch):
+    def refuse(*args, **kwargs):
+        raise PermissionError("read-only directory")
+
+    monkeypatch.setattr(_files.tempfile, "mkstemp", refuse)
+    with pytest.raises(PathError, match="read-only directory"):
+        with _files.writing(home / "a.bin"):
+            pass
 
 
 def test_failing_utime_only_warns(home, monkeypatch, caplog):

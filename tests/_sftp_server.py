@@ -2,8 +2,8 @@
 
 Paths from the client are taken relative to that directory, like an SSH user's home.
 It accepts one user with one public key, counts connections, and can be told to
-drop the first connections, to deny access to paths, or to report a larger size
-than a file has (which makes a download look truncated).
+drop the first connections, to deny access to paths (or only opening them), or to
+report a larger size than a file has (which makes a download look truncated).
 """
 
 import os
@@ -58,7 +58,7 @@ class _SFTP(SFTPServerInterface):
     lstat = stat
 
     def open(self, path, flags, attr):
-        if path in self.stub.denied:
+        if path in self.stub.denied or path in self.stub.denied_open:
             return paramiko.SFTP_PERMISSION_DENIED
         try:
             file = open(self._local(path), "rb")  # noqa: SIM115 - closed by the handle
@@ -81,6 +81,7 @@ class StubSFTPServer:
         self.connections = 0
         self.fail_connections = 0
         self.denied = set()
+        self.denied_open = set()  # stat works, open is refused
         self.extra_size = {}
         self._transports = []
         self._socket = socket.socket()
