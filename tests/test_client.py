@@ -1,3 +1,4 @@
+import email.utils
 import itertools
 import json
 import logging
@@ -418,13 +419,18 @@ class Servers:
         self.http = http
         self.root = root
 
-    def put_private(self, key, body=b"private"):
+    def put_private(self, key, body=b"private", mtime=None):
         path = self.root.joinpath("private_html", "renate-od", *key.split("/"))
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(body)
+        if mtime is not None:
+            os.utime(path, (mtime, mtime))
 
-    def put_public(self, key, body=b"public"):
-        self.http.serve(f"/~data/renate-od/{key}", {"body": body})
+    def put_public(self, key, body=b"public", mtime=None):
+        answer = {"body": body}
+        if mtime is not None:
+            answer["last_modified"] = email.utils.formatdate(mtime, usegmt=True)
+        self.http.serve(f"/~data/renate-od/{key}", answer)
 
     def public_requests(self):
         return sum(self.http.requests.values())
@@ -675,3 +681,151 @@ def test_get_refuses_a_directory_in_the_private_copy(servers):
     with pytest.raises(PathError, match="it is not a file"):
         client.get("a.h5")
     assert servers.sftp.connections == 0
+
+
+OLD, NEW = 1_500_000_000, 1_600_000_000  # two server/local modification times
+
+
+@pytest.fixture
+def stat_calls(monkeypatch):
+    """Record the update-check stat calls made through _sftp.stat."""
+    calls = []
+    original = _sftp.stat
+
+    def spy(settings, remote, **kwargs):
+        calls.append(str(remote))
+        return original(settings, remote, **kwargs)
+
+    monkeypatch.setattr(_sftp, "stat", spy)
+    return calls
+
+
+def place_at(path, body, mtime):
+    place(path, body)
+    os.utime(path, (mtime, mtime))
+
+
+def notices(caplog):
+    return [
+        r for r in caplog.records if "without checking the server" in r.getMessage()
+    ]
+
+
+def test_local_private_copy_gives_one_notice(servers, caplog):
+    client = DataClient("renate-od")
+    place(client.local_path("a.h5"), b"mine")
+    place(client.local_path("b.h5"), b"mine")
+    with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
+        client.get("a.h5")
+        client.get("b.h5")
+    (notice,) = notices(caplog)
+    assert "DataClient('renate-od').check_updates()" in notice.getMessage()
+    assert "get(key, check_server=True)" in notice.getMessage()
+    assert servers.sftp.connections == 0
+
+
+def test_no_notice_when_the_server_is_checked(servers, caplog):
+    client = DataClient("renate-od")
+    servers.put_private("a.h5", b"mine", mtime=OLD)
+    place_at(client.local_path("a.h5"), b"mine", OLD)
+    with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
+        client.get("a.h5", check_server=True)
+    assert notices(caplog) == []
+
+
+def test_no_notice_for_downloads_or_public_copies(servers, caplog):
+    servers.put_private("a.h5")
+    servers.put_public("b.h5")
+    client = DataClient("renate-od")
+    with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
+        client.get("a.h5")  # downloaded, not an unchecked local copy
+        client.get("b.h5", private=False)
+    assert notices(caplog) == []
+
+
+@pytest.mark.parametrize(
+    ("server", "local", "downloaded"),
+    [
+        ((b"new!", NEW), (b"old!", OLD), True),  # server newer
+        ((b"same", OLD), (b"same", OLD), False),  # unchanged
+        ((b"longer", OLD), (b"old!", NEW), True),  # server older, size differs
+        ((b"same", OLD), (b"mine", NEW), False),  # server older, same size
+    ],
+)
+def test_check_server_on_a_private_copy(servers, stat_calls, server, local, downloaded):
+    servers.put_private("a.h5", server[0], mtime=server[1])
+    client = DataClient("renate-od")
+    path = client.local_path("a.h5")
+    place_at(path, *local)
+    assert client.get("a.h5", check_server=True) == path
+    assert path.read_bytes() == (server[0] if downloaded else local[0])
+    assert len(stat_calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("server", "local", "downloaded"),
+    [
+        ((b"new!", NEW), (b"old!", OLD), True),
+        ((b"same", OLD), (b"same", OLD), False),
+        ((b"longer", OLD), (b"old!", NEW), True),
+    ],
+)
+def test_check_server_on_a_public_copy(servers, server, local, downloaded):
+    servers.put_public("a.h5", server[0], mtime=server[1])
+    client = DataClient("renate-od")
+    path = client.local_path("a.h5", private=False)
+    place_at(path, *local)
+    client.get("a.h5", private=False, check_server=True)
+    assert path.read_bytes() == (server[0] if downloaded else local[0])
+    assert servers.http.requests["HEAD /~data/renate-od/a.h5"] == 1
+    assert servers.http.requests["/~data/renate-od/a.h5"] == (1 if downloaded else 0)
+
+
+def test_force_downloads_a_private_copy_again(servers, stat_calls):
+    servers.put_private("a.h5", b"good", mtime=OLD)
+    client = DataClient("renate-od")
+    place_at(client.local_path("a.h5"), b"bad!", OLD)  # same size and time: corrupted
+    assert client.get("a.h5").read_bytes() == b"bad!"
+    assert client.get("a.h5", force=True).read_bytes() == b"good"
+    assert stat_calls == []  # no comparison
+
+
+def test_force_downloads_a_public_copy_again(servers):
+    servers.put_public("a.h5", b"good", mtime=OLD)
+    client = DataClient("renate-od")
+    place_at(client.local_path("a.h5", private=False), b"bad!", OLD)
+    assert client.get("a.h5", private=False, force=True).read_bytes() == b"good"
+    assert servers.http.requests["HEAD /~data/renate-od/a.h5"] == 0
+
+
+def test_failed_check_keeps_the_local_copy_and_raises(servers):
+    write_config(
+        host="127.0.0.1",
+        port=servers.sftp.port,
+        host_keys=_config.settings()["host_keys"],
+        public_url=servers.http.url("/~data"),
+    )  # no key
+    client = DataClient("renate-od")
+    path = client.local_path("a.h5")
+    place(path, b"mine")
+    with pytest.raises(TransferError, match="kept the local copy .* could not be"):
+        client.get("a.h5", check_server=True)
+    assert path.read_bytes() == b"mine"
+    assert client.get("a.h5") == path  # still usable without the check
+
+
+def test_check_of_a_local_copy_missing_on_the_server_raises(servers):
+    client = DataClient("renate-od")
+    place(client.local_path("a.h5"), b"mine")
+    with pytest.raises(TransferError, match="not on the private server"):
+        client.get("a.h5", check_server=True)
+    assert client.local_path("a.h5").read_bytes() == b"mine"
+
+
+def test_check_server_finds_a_file_uploaded_during_the_session(servers):
+    servers.put_public("a.h5", b"dummy")
+    client = DataClient("renate-od")
+    assert client.get("a.h5").read_bytes() == b"dummy"  # not on the private server
+    servers.put_private("a.h5", b"real")
+    assert client.get("a.h5").read_bytes() == b"dummy"  # remembered as missing
+    assert client.get("a.h5", check_server=True).read_bytes() == b"real"

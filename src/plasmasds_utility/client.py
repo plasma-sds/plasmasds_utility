@@ -77,6 +77,67 @@ def _summary_at_exit():
         print(f"plasmasds_utility: {_fallback_summary()}", file=sys.stderr)
 
 
+_noticed = False  # whether the unchecked-local-data notice was given
+
+
+def _notice_unchecked(prefix):
+    """Say once per process that local data is used without checking the server."""
+    global _noticed
+    if _noticed:
+        return
+    _noticed = True
+    _config.logger.warning(
+        "using local data without checking the server for newer versions; to "
+        "check, call DataClient(%r).check_updates(), or get(key, check_server=True)",
+        prefix,
+    )
+
+
+def _differs(path, size, mtime):
+    """Return whether the server copy (size, mtime) differs from the local file.
+
+    It does if the sizes differ, or the server copy is newer in whole seconds;
+    unknown server values are not compared.
+    """
+    local = path.stat()
+    if size is not None and size != local.st_size:
+        return True
+    return mtime is not None and int(mtime) > int(local.st_mtime)
+
+
+def _refresh_private(settings, remote, path, force):
+    """Download the private copy if the server differs, or always if forced.
+
+    Returns whether the file was downloaded.
+    """
+    if not force:
+        size, mtime = _sftp.stat(settings, remote, use_cache=False)
+        if not _differs(path, size, mtime):
+            return False
+    _sftp.download(settings, remote, path, use_cache=False)
+    return True
+
+
+def _refresh_public(url, path, force):
+    """Download the public copy if the server differs, or always if forced.
+
+    Returns whether the file was downloaded.
+    """
+    if not force:
+        size, mtime = _https.head(url)
+        if not _differs(path, size, mtime):
+            return False
+    _https.download(url, path)
+    return True
+
+
+def _kept(path, error):
+    """Return the error for a requested check that could not be done."""
+    return TransferError(
+        f"kept the local copy {path}, but the server could not be checked: {error}"
+    )
+
+
 def _present(path, key):
     """Return whether path is a file; raise PathError if something else is there."""
     if path.is_file():
@@ -209,8 +270,13 @@ class DataClient:
         _paths.check_key(key)  # before any I/O
         return _paths.local_path(self.client_dir(), key, private=private)
 
-    def get(self, key, *, private=None):
-        """Return the local path of a data file, downloading it if it is missing.
+    def get(self, key, *, private=None, check_server=False, force=False):
+        """Return the local path of a data file, downloading it first if needed.
+
+        ``get`` does not open the file: it returns a :class:`pathlib.Path` for the
+        client to open with its usual tools (``h5py``, ``numpy``, ...). Clients
+        call it every time they need a file; when the file is already on disk,
+        that costs a single ``stat``.
 
         Looks in this order and returns the first file found:
 
@@ -229,11 +295,18 @@ class DataClient:
         a process with a warning, every one in the log file, and all of them in a
         summary at exit and in :func:`show_public_fallbacks`.
 
-        A local private copy is returned after a single ``stat``, without
-        contacting a server. With the default, a local public copy is returned only
-        after the private server has been asked once per file and process, because
-        private data comes first; use ``private=False`` to skip that, for example
-        offline.
+        By default a local copy is used without asking its server whether it has
+        a newer version; the first time this happens for private data in a
+        process, a notice says so. With ``check_server=True`` the local copy is
+        compared with its server (modification time and size) and downloaded
+        again if the server copy is newer or differs in size; with ``force=True``
+        it is downloaded again regardless, for example when it is corrupted. If a
+        requested check cannot be done, the local copy is kept and
+        :class:`TransferError` is raised. Without a local copy, the private
+        server is asked even about a file it was found not to have earlier in
+        the process (with the default, that answer is remembered, so a local
+        public copy normally costs one question per file and process; use
+        ``private=False`` to skip it, for example offline).
 
         Parameters
         ----------
@@ -242,6 +315,11 @@ class DataClient:
         private : bool or None, default None
             True for private data only, False for public data only (the private
             server is never contacted), None for the best available.
+        check_server : bool, default False
+            Compare a local copy with its server and download it again if the
+            server copy is newer or differs in size.
+        force : bool, default False
+            Download the file again even if a local copy exists.
 
         Returns
         -------
@@ -251,32 +329,50 @@ class DataClient:
         Raises
         ------
         PathError
-            If the key is invalid, or something other than a file is in the way.
+            If the key is invalid, something other than a file is in the way, or
+            the file cannot be written.
         AuthError
             With ``private=True``, if private data is not available to you.
         TransferError
-            If the private server fails, other than by the fallbacks above, or the
-            file is not on the servers that were tried.
+            If the private server fails, other than by the fallbacks above, the
+            file is not on the servers that were tried, or a requested check of a
+            local copy cannot be done.
         ConfigError
             As for :meth:`client_dir`, or if the configured SSH key is missing or
             unreadable.
         """
         settings = _config.settings()
+        refresh = check_server or force
         reason = None
         if private is not False:
             private_path = self.local_path(key, private=True)
-            if _present(private_path, key):
-                return private_path
             remote = _paths.private_remote(settings, self.prefix, key)
+            if _present(private_path, key):
+                if not refresh:
+                    _notice_unchecked(self.prefix)
+                    return private_path
+                try:
+                    _refresh_private(settings, remote, private_path, force)
+                except TransferError as error:
+                    raise _kept(private_path, error) from error
+                return private_path
             try:
-                return _sftp.download(settings, remote, private_path)
+                return _sftp.download(
+                    settings, remote, private_path, use_cache=not refresh
+                )
             except (AuthError, _sftp.NotOnServer) as error:
                 if private:
                     raise
                 reason = error
         public_path = self.local_path(key, private=False)
-        if not _present(public_path, key):
-            url = _paths.public_url(settings, self.prefix, key)
+        url = _paths.public_url(settings, self.prefix, key)
+        if _present(public_path, key):
+            if refresh:
+                try:
+                    _refresh_public(url, public_path, force)
+                except TransferError as error:
+                    raise _kept(public_path, error) from error
+        else:
             try:
                 _https.download(url, public_path)
             except TransferError as error:

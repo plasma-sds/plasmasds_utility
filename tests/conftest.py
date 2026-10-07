@@ -137,6 +137,7 @@ def home(tmp_path, monkeypatch):
         monkeypatch.delenv(variable, raising=False)
     monkeypatch.setattr(_config, "_settings", None)
     monkeypatch.setattr(client, "_fallbacks", {})
+    monkeypatch.setattr(client, "_noticed", False)
     # Never use a real SSH agent: unsetting SSH_AUTH_SOCK is not enough on Windows,
     # where paramiko asks Pageant or the OpenSSH agent pipe directly.
     monkeypatch.setattr(paramiko.client, "Agent", FakeAgent)
