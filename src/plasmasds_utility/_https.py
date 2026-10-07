@@ -103,14 +103,25 @@ def download(url, target, *, timeout=30, attempts=3, backoff=1.0):
     TransferError
         If the download fails; the message names the URL and the reason.
     """
+    _files.make_parent(target)
+    _run(url, lambda: _fetch_once(url, target, timeout), "download", attempts, backoff)
+    logger.info("downloaded %s to %s", url, target)
+    return target
+
+
+def _run(url, action, verb, attempts, backoff):
+    """Call action() with bounded retries and backoff; return its result.
+
+    HTTP 404 and other 4xx are not retried; 5xx, connection errors, timeouts and
+    truncated transfers are. ``verb`` names the operation in messages.
+    """
     if attempts < 1:
         raise ValueError(f"attempts must be at least 1, got {attempts}")
-    _files.make_parent(target)
     if not url.startswith("https://"):
-        logger.warning("downloading over an unencrypted connection: %s", url)
+        logger.warning("%s over an unencrypted connection: %s", verb, url)
     for attempt in range(1, attempts + 1):
         try:
-            _fetch_once(url, target, timeout)
+            return action()
         except urllib.error.HTTPError as error:
             if error.code == 404:
                 raise TransferError(
@@ -118,16 +129,14 @@ def download(url, target, *, timeout=30, attempts=3, backoff=1.0):
                 ) from error
             if error.code < 500:
                 raise TransferError(
-                    f"cannot download {url}: HTTP {error.code} {error.reason}"
+                    f"cannot {verb} {url}: HTTP {error.code} {error.reason}"
                 ) from error
             last_error = error
         except (OSError, http.client.HTTPException) as error:
             last_error = error
-        else:
-            logger.info("downloaded %s to %s", url, target)
-            return target
         logger.warning(
-            "download of %s failed (attempt %d of %d): %s",
+            "%s of %s failed (attempt %d of %d): %s",
+            verb,
             url,
             attempt,
             attempts,
@@ -136,5 +145,5 @@ def download(url, target, *, timeout=30, attempts=3, backoff=1.0):
         if attempt < attempts:
             time.sleep(backoff * 2 ** (attempt - 1))
     raise TransferError(
-        f"cannot download {url} after {attempts} attempts: {last_error}"
+        f"cannot {verb} {url} after {attempts} attempts: {last_error}"
     ) from last_error
