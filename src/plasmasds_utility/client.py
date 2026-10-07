@@ -114,9 +114,9 @@ def _newer(path, size, mtime):
         return True
     if size is not None and size != local.st_size:
         _config.logger.warning(
-            "%s differs in size from the server copy (%d bytes here, %d there) "
-            "although the server copy is not newer; it may be damaged: replace it "
-            "with get(key, check_server=True, force=True)",
+            "%s differs in size from the server copy (local copy: %d bytes, server "
+            "copy: %d bytes) although the server copy is not newer; it may be "
+            "damaged: replace it with get(key, check_server=True, force=True)",
             path,
             local.st_size,
             size,

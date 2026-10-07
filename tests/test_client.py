@@ -795,9 +795,7 @@ def test_size_difference_alone_warns_but_keeps_the_copy(servers, caplog):
     with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
         client.get("a.h5", check_server=True)
     assert path.read_bytes() == b"old!"
-    assert "differs in size from the server copy (4 bytes here, 6 there)" in (
-        caplog.text
-    )
+    assert "(local copy: 4 bytes, server copy: 6 bytes)" in caplog.text
     assert "check_server=True, force=True" in caplog.text
 
 
