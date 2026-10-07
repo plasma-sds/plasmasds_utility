@@ -1,6 +1,8 @@
+import logging
 import os
 import socket
 import threading
+import time
 import types
 from pathlib import Path, PurePosixPath
 
@@ -150,6 +152,34 @@ def test_dropped_connection_is_retried(served, home, sleeps):
     assert (home / "x.h5").read_bytes() == b"private data"
     assert served.connections == 2
     assert sleeps == [1.0]
+
+
+def test_closed_session_is_replaced_quietly(served, home, sleeps, caplog):
+    download(home / "one.h5")
+    client = _sftp._sessions[_sftp._server(_config.settings())][0]
+    served.drop_connections()
+    deadline = time.monotonic() + 5
+    while client.get_transport().is_active() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
+        download(home / "two.h5")
+    assert (home / "two.h5").read_bytes() == b"private data"
+    assert served.connections == 2
+    assert sleeps == []
+    assert "failed" not in caplog.text
+
+
+def test_sessions_send_keepalives(served, home, monkeypatch):
+    intervals = []
+    original = paramiko.Transport.set_keepalive
+
+    def spy(self, interval):
+        intervals.append(interval)
+        original(self, interval)
+
+    monkeypatch.setattr(paramiko.Transport, "set_keepalive", spy)
+    download(home / "x.h5")
+    assert intervals == [60]
 
 
 def test_silent_server_times_out(home, sleeps):

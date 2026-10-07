@@ -114,6 +114,11 @@ class StubSFTPServer:
             except (paramiko.SSHException, EOFError, OSError):
                 transport.close()
 
+    def drop_connections(self):
+        """Close every open session from the server side."""
+        for transport in self._transports:
+            transport.close()
+
     def close(self):
         self._socket.close()
         for transport in self._transports:

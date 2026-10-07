@@ -39,6 +39,7 @@ _lock = threading.Lock()
 _sessions = {}  # (host, port, user) -> (SSHClient, SFTPClient)
 _unavailable = {}  # (host, port, user) -> AuthError
 _not_on_server = set()  # ((host, port, user), remote path) known to be missing
+_KEEPALIVE = 60  # seconds between SSH keepalive messages on an idle session
 
 
 def _server(settings):
@@ -123,6 +124,8 @@ def _connect(settings, timeout, key):
             allow_agent=True,
             look_for_keys=True,
         )
+        # Keepalives stop a firewall from silently dropping an idle session.
+        client.get_transport().set_keepalive(_KEEPALIVE)
         sftp = client.open_sftp()
         sftp.get_channel().settimeout(timeout)
     except BaseException:
@@ -183,6 +186,12 @@ def _auth_error(error, settings, locked_key):
             f"if this is wrong, fix the host keys and {_RESTART}"
         )
     return None
+
+
+def _alive(client):
+    """Return whether an SSH session is still open."""
+    transport = client.get_transport()
+    return transport is not None and transport.is_active()
 
 
 def _close(server):
@@ -256,6 +265,8 @@ def download(settings, remote, target, *, timeout=30, attempts=3, backoff=1.0):
             if (server, str(remote)) in _not_on_server:
                 raise NotOnServer(f"{remote} is not on the private server")
             locked_key = None
+            if server in _sessions and not _alive(_sessions[server][0]):
+                _close(server)  # closed by the server: reconnect without a warning
             try:
                 if server not in _sessions:
                     key_path = _config.ssh_key()
