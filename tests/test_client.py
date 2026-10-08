@@ -736,6 +736,21 @@ def test_first_get_explains_the_update_options_once(servers, capsys, caplog):
     assert levels == {logging.INFO}
 
 
+def test_explanation_reaches_the_log_file_when_get_comes_first(home):
+    # Place the file without any call that would start logging first.
+    path = _config.default_data_dir() / "renate-od" / "private" / "a.h5"
+    place(path, b"mine")
+    assert DataClient("renate-od").get("a.h5") == path
+    text = (_config.log_dir() / _config.LOG_FILE).read_text("utf-8")
+    assert "INFO plasmasds_utility: get() uses a local copy" in text
+
+
+def test_invalid_key_prints_no_explanation(home, capsys):
+    with pytest.raises(PathError):
+        DataClient("renate-od").get("../a.h5")
+    assert notices(capsys) == []
+
+
 def test_local_copy_is_used_without_contacting_the_server(servers):
     client = DataClient("renate-od")
     place(client.local_path("a.h5"), b"mine")

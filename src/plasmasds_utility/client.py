@@ -425,6 +425,8 @@ class DataClient:
                 f"update must be one of {', '.join(map(repr, _UPDATE_CHOICES))}, "
                 f"got {update!r}"
             )
+        _paths.check_key(key)  # an invalid call prints nothing
+        _config.start_logging()  # so that the explanation reaches the log file
         _explain_update()
         settings = _config.settings()
         refresh = update != "never"
