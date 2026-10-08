@@ -181,13 +181,16 @@ def _refresh_public(url, path, force):
     return True
 
 
-def _kept(path, error):
-    """Return the error for a requested check that could not be done."""
+def _kept(path, error, force):
+    """Return the error for a requested check or download that could not be done.
+
+    An AuthError stays an AuthError, so callers catching it still do.
+    """
+    cls = AuthError if isinstance(error, AuthError) else TransferError
     if isinstance(error, (_sftp.NotOnServer, _https.NotOnServer)):
-        return TransferError(f"kept the local copy {path}: {error}")
-    return TransferError(
-        f"kept the local copy {path}, but the server could not be checked: {error}"
-    )
+        return cls(f"kept the local copy {path}: {error}")
+    failed = "could not be downloaded again" if force else "could not be checked"
+    return cls(f"kept the local copy {path}, but the server copy {failed}: {error}")
 
 
 def _present(path, key):
@@ -441,7 +444,7 @@ class DataClient:
                 try:
                     _refresh_private(settings, remote, private_path, force)
                 except TransferError as error:
-                    raise _kept(private_path, error) from error
+                    raise _kept(private_path, error, force) from error
                 return private_path
             try:
                 return _sftp.download(
@@ -458,7 +461,7 @@ class DataClient:
                 try:
                     _refresh_public(url, public_path, force)
                 except TransferError as error:
-                    raise _kept(public_path, error) from error
+                    raise _kept(public_path, error, force) from error
         else:
             try:
                 _https.download(url, public_path)

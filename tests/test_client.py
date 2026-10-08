@@ -879,10 +879,21 @@ def test_failed_check_keeps_the_local_copy_and_raises(servers):
     client = DataClient("renate-od")
     path = client.local_path("a.h5")
     place(path, b"mine")
-    with pytest.raises(TransferError, match="kept the local copy .* could not be"):
-        client.get("a.h5", update="if_newer")
+    with pytest.raises(AuthError, match="kept the local copy .* could not be checked"):
+        client.get("a.h5", update="if_newer")  # still an AuthError, as documented
     assert path.read_bytes() == b"mine"
     assert client.get("a.h5") == path  # still usable without the check
+
+
+def test_failed_forced_download_keeps_the_local_copy(servers, monkeypatch):
+    monkeypatch.setattr(_https, "time", types.SimpleNamespace(sleep=lambda s: None))
+    servers.http.serve("/~data/renate-od/a.h5", {"status": 500})
+    client = DataClient("renate-od")
+    path = client.local_path("a.h5", private=False)
+    place(path, b"mine")
+    with pytest.raises(TransferError, match="could not be downloaded again"):
+        client.get("a.h5", private=False, update="force")
+    assert path.read_bytes() == b"mine"
 
 
 def test_check_of_a_local_copy_missing_on_the_server_raises(servers):
