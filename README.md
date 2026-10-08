@@ -61,19 +61,22 @@ plasmasds_utility.show_public_fallbacks()
 
 ### Newer data on the server
 
-By default, a local copy is used without asking the server whether it has a newer version; the first time this happens for private data in a session, a notice says so.
-To check:
+By default, a local copy is used without asking the server whether it has a newer version; a file that is not on disk is always downloaded.
+The `update` argument changes what happens to a local copy, and the first `get()` in a session prints these options:
 
 ```python
-data.get(key, check_server=True)  # download again if the server copy is newer
-data.get(key, check_server=True, force=True)  # download again regardless
-data.check_updates()  # check every local file of this client
+data.get(key)  # update="never": use the local copy as it is
+data.get(key, update="if_newer")  # download again if the server copy is newer
+data.get(key, update="force")  # download again regardless, e.g. a damaged copy
+data.check_updates()  # check every local file of this client ("if_newer")
 ```
 
-The check compares the modification time of the local file with the server's (SFTP for private data, an HTTPS `HEAD` request for public data) and downloads again only when the server copy is newer.
-A local copy that is not older but differs in size is kept, with a warning that it may be damaged; `force=True` replaces it.
-`check_updates()` covers both the private and the public copies.
-`check_updates()` prints a short report and returns the files it downloaded again; a file missing on the server is kept with a warning.
+The check compares the modification time of the local file with the server's (SFTP for private data, an HTTPS `HEAD` request for public data, which must send `Last-Modified`) and downloads again only when the server copy is more than 2 seconds newer.
+A local copy that is newer than the server's is never overwritten by a check, so data you are testing locally is safe; a copy that is not older but differs in size is kept with a warning.
+`check_updates()` covers both the private and the public copies, lists each private server directory once, and prints a short report to stderr; it returns the files it downloaded again, and a file missing on the server is kept with a warning.
+
+**For whoever manages the server:** when an older version of a file is restored or re-published (for example with `rsync -a`, `cp -p` or `tar`, which keep the old modification time), give it a fresh modification time with `touch`.
+Otherwise users' checks see their copy as newer and keep it.
 
 ### Private data
 
