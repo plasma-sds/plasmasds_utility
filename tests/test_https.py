@@ -231,7 +231,8 @@ def test_head_without_headers_returns_none(http_server, caplog):
     http_server.serve("/a.txt", {"body": b"x", "length": "five"})
     with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
         assert _https.head(http_server.url("/a.txt")) == (None, None)
-    assert "no usable Last-Modified" in caplog.text
+    # No download-time warning: the caller reports "cannot compare" instead.
+    assert "no usable Last-Modified" not in caplog.text
 
 
 def test_head_of_a_missing_file(http_server, sleeps):

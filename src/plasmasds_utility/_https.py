@@ -22,11 +22,17 @@ class NotOnServer(TransferError):
     """The file is not on the public server (HTTP 404; not retried)."""
 
 
-def _server_time(last_modified, url):
-    """Return the Last-Modified header as a POSIX timestamp, or None with a warning."""
+def _server_time(last_modified, url, *, download=True):
+    """Return the Last-Modified header as a POSIX timestamp, or None.
+
+    For a download, a missing or unusable header also logs a warning; a check
+    (HEAD) reports it to its caller instead.
+    """
     try:
         return email.utils.parsedate_to_datetime(last_modified).timestamp()
     except (TypeError, ValueError):
+        if not download:
+            return None
         logger.warning(
             "%s sent no usable Last-Modified header (%r); the local copy keeps the "
             "download time, so the update check cannot compare it with the server",
@@ -172,7 +178,7 @@ def head(url, *, timeout=30, attempts=3, backoff=1.0):
     -------
     tuple
         ``(size, mtime)``: the size in bytes and the POSIX modification time, each
-        None if the server does not send it (a warning is logged).
+        None if the server does not send it.
 
     Raises
     ------
@@ -188,6 +194,6 @@ def head(url, *, timeout=30, attempts=3, backoff=1.0):
         with urllib.request.urlopen(request, timeout=timeout) as response:
             headers = response.headers
         size = _content_length(headers, url)
-        return size, _server_time(headers.get("Last-Modified"), url)
+        return size, _server_time(headers.get("Last-Modified"), url, download=False)
 
     return _run(url, ask, "check", attempts, backoff)
