@@ -836,8 +836,21 @@ def test_size_difference_alone_warns_but_keeps_the_copy(servers, caplog):
     with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
         client.get("a.h5", update="if_newer")
     assert path.read_bytes() == b"old!"
+    assert "same modification time as the server copy" in caplog.text
     assert "(local copy: 4 bytes, server copy: 6 bytes)" in caplog.text
     assert "edited locally, or changed on the server" in caplog.text
+
+
+def test_edited_local_copy_gets_no_warning(servers, caplog):
+    servers.put_private("a.h5", b"server", mtime=OLD)
+    client = DataClient("renate-od")
+    path = client.local_path("a.h5")
+    place_at(path, b"edited and longer", NEW)  # newer and a different size
+    with caplog.at_level(logging.INFO, logger="plasmasds_utility"):
+        client.get("a.h5", update="if_newer")
+    assert path.read_bytes() == b"edited and longer"
+    assert "which is newer than the server copy" in caplog.text
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
     assert 'update="force"' in caplog.text
 
 

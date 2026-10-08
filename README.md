@@ -72,7 +72,7 @@ data.check_updates()  # check every local file of this client ("if_newer")
 ```
 
 The check compares the modification time of the local file with the server's (SFTP for private data, an HTTPS `HEAD` request for public data, which must send `Last-Modified`) and downloads again only when the server copy is more than 2 seconds newer.
-A local copy that is newer than the server's is never overwritten by a check, so data you are testing locally is safe; a copy that is not older but differs in size is kept with a warning.
+A local copy that is newer than the server's is never overwritten by a check, so data you are testing locally is safe; a copy with the same modification time but a different size is kept with a warning.
 `check_updates()` covers both the private and the public copies, lists each private server directory once, and prints a short report to stderr; it returns the files it downloaded again, and a file missing on the server is kept with a warning.
 
 **For whoever manages the server:** when an older version of a file is restored or re-published (for example with `rsync -a`, `cp -p` or `tar`, which keep the old modification time), give it a fresh modification time with `touch`.

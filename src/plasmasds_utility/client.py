@@ -120,8 +120,8 @@ def _newer(path, size, mtime):
 
     Newer means a modification time more than ``_TOLERANCE`` seconds later. A local
     copy that is newer than the server's is kept (edited locally, or the server
-    copy was restored with an older time) and logged; one that is not newer but
-    differs in size is kept with a warning.
+    copy was restored with an older time) and logged at INFO; one with the same
+    time but a different size is kept with a warning.
 
     Raises
     ------
@@ -147,11 +147,11 @@ def _newer(path, size, mtime):
             'server copy was restored, use update="force")',
             path,
         )
-    if size is not None and size != local.st_size:
+    elif size is not None and size != local.st_size:
         _config.logger.warning(
-            "%s differs in size from the server copy (local copy: %d bytes, server "
-            "copy: %d bytes) although the server copy is not newer: it was edited "
-            "locally, or changed on the server without a newer modification time; "
+            "%s has the same modification time as the server copy but a different "
+            "size (local copy: %d bytes, server copy: %d bytes): it was edited "
+            "locally, or changed on the server without a new modification time; "
             'to replace it with the server copy, use get(key, update="force")',
             path,
             local.st_size,
@@ -384,7 +384,8 @@ class DataClient:
         - ``"never"`` (default): the local copy is used without asking the server;
         - ``"if_newer"``: the local copy is compared with its server and
           downloaded again only if the server copy is newer (modification time);
-          a copy that is not newer but differs in size is kept with a warning;
+          a newer local copy is kept, and one with the same time but a different
+          size is kept with a warning;
         - ``"force"``: the local copy is downloaded again regardless, for example
           when it is damaged.
 
