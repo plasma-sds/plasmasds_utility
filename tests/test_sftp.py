@@ -499,3 +499,21 @@ def test_stat_of_a_denied_file(served):
     served.denied.add(str(REMOTE))
     with pytest.raises(TransferError, match="is denied"):
         _sftp.stat(_config.settings(), REMOTE)
+
+
+def test_listdir_returns_sizes_and_mtimes(served):
+    listing = _sftp.listdir(_config.settings(), REMOTE.parent)
+    assert listing == {"x.h5": (len(b"private data"), TIMESTAMP)}
+    assert served.listings[str(REMOTE.parent)] == 1
+
+
+def test_listdir_of_a_missing_directory(sftp_server, sleeps):
+    with pytest.raises(_sftp.NotOnServer):
+        _sftp.listdir(_config.settings(), REMOTE.parent)
+    assert sleeps == []
+
+
+def test_listdir_of_a_denied_directory(served):
+    served.denied.add(str(REMOTE.parent))
+    with pytest.raises(TransferError, match="is denied"):
+        _sftp.listdir(_config.settings(), REMOTE.parent)

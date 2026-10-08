@@ -199,6 +199,29 @@ def _present(path, key):
     return False
 
 
+def _local_files(tree):
+    """Return (path, key) for the data files below tree, sorted.
+
+    Temporary files, anything hidden (including inside hidden directories) and
+    names that are not valid keys (with a warning) are left out.
+    """
+    if not tree.is_dir():
+        return []
+    files = []
+    for path in sorted(p for p in tree.rglob("*") if p.is_file()):
+        parts = path.relative_to(tree).parts
+        if any(part.startswith(".") for part in parts) or path.name.endswith(".part"):
+            continue
+        key = "/".join(parts)
+        try:
+            _paths.check_key(key)
+        except PathError as error:
+            _config.logger.warning("skipping %s: %s", path, error)
+            continue
+        files.append((path, key))
+    return files
+
+
 class DataClient:
     """Access the data of one client package.
 
@@ -457,8 +480,9 @@ class DataClient:
         hidden files are skipped, including anything inside a hidden directory,
         and so is a file whose name is not a valid key (with a warning).
 
-        It sends one request per file (an SFTP ``stat``, one at a time, or an
-        HTTPS ``HEAD``), so a tree of many thousands of files takes a while.
+        Private files are checked with one SFTP listing per directory; public
+        files with one HTTPS ``HEAD`` request each, so a public tree of many
+        thousands of files takes a while.
         Unlike a single ``get``, a file missing on its server is kept with a
         warning, and the other files are still checked. If private data is not
         available to you, the ``private/`` tree is not checked further. At the
@@ -484,50 +508,28 @@ class DataClient:
         settings = _config.settings()
         base = self.client_dir()
         updated, missing, failed = [], [], []
-        checked = 0
-        for private in (False, True):
-            tree = base / ("private" if private else "public")
-            files = (
-                sorted(p for p in tree.rglob("*") if p.is_file())
-                if tree.is_dir()
-                else []
+        public = _local_files(base / "public")
+        private = _local_files(base / "private")
+        checked = len(public) + len(private)
+        for path, key in public:
+            url = _paths.public_url(settings, self.prefix, key)
+            try:
+                if _refresh_public(url, path, False):
+                    updated.append(path)
+                    _config.logger.info("updated %s", path)
+            except _https.NotOnServer as error:
+                missing.append(path)
+                _config.logger.warning("kept %s: %s", path, error)
+            except (TransferError, PathError) as error:
+                failed.append((key, error))
+                _config.logger.warning("cannot check %s: %s", path, error)
+        try:
+            self._check_private(settings, private, updated, missing, failed)
+        except AuthError as error:
+            failed.append(("private data (not checked)", error))
+            _config.logger.warning(
+                "the private data of %s was not checked: %s", self.prefix, error
             )
-            for path in files:
-                parts = path.relative_to(tree).parts
-                if any(part.startswith(".") for part in parts) or path.name.endswith(
-                    ".part"
-                ):
-                    continue
-                key = path.relative_to(tree).as_posix()
-                try:
-                    _paths.check_key(key)
-                except PathError as error:
-                    _config.logger.warning("skipping %s: %s", path, error)
-                    continue
-                checked += 1
-                try:
-                    if private:
-                        remote = _paths.private_remote(settings, self.prefix, key)
-                        changed = _refresh_private(settings, remote, path, False)
-                    else:
-                        url = _paths.public_url(settings, self.prefix, key)
-                        changed = _refresh_public(url, path, False)
-                except AuthError as error:
-                    failed.append(("private data (not checked)", error))
-                    _config.logger.warning(
-                        "the private data of %s was not checked: %s", self.prefix, error
-                    )
-                    break
-                except (_sftp.NotOnServer, _https.NotOnServer) as error:
-                    missing.append(key)
-                    _config.logger.warning("kept %s: %s", path, error)
-                except (TransferError, PathError) as error:
-                    failed.append((key, error))
-                    _config.logger.warning("cannot check %s: %s", path, error)
-                else:
-                    if changed:
-                        updated.append(path)
-                        _config.logger.info("updated %s", path)
         print(
             f"plasmasds_utility: checked {checked} file(s) of {self.prefix}: "
             f"{len(updated)} updated, {len(missing)} not on the server, "
@@ -545,6 +547,46 @@ class DataClient:
             error.missing = missing
             raise error
         return updated
+
+    def _check_private(self, settings, files, updated, missing, failed):
+        """Check local private files, listing each server directory once.
+
+        Appends to ``updated``, ``missing`` and ``failed``; an AuthError stops the
+        check and is raised.
+        """
+        by_dir = {}
+        for path, key in files:
+            remote = _paths.private_remote(settings, self.prefix, key)
+            by_dir.setdefault(remote.parent, []).append((path, key, remote))
+        for remote_dir, entries in by_dir.items():
+            try:
+                listing = _sftp.listdir(settings, remote_dir)
+            except _sftp.NotOnServer:
+                listing = {}
+            except AuthError:
+                raise
+            except TransferError as error:
+                for _path, key, _remote in entries:
+                    failed.append((key, error))
+                _config.logger.warning("cannot list %s: %s", remote_dir, error)
+                continue
+            for path, key, remote in entries:
+                if remote.name not in listing:
+                    missing.append(path)
+                    _config.logger.warning(
+                        "kept %s: %s is not on the private server", path, remote
+                    )
+                    continue
+                try:
+                    if _newer(path, *listing[remote.name]):
+                        _sftp.download(settings, remote, path, use_cache=False)
+                        updated.append(path)
+                        _config.logger.info("updated %s", path)
+                except AuthError:
+                    raise
+                except (TransferError, PathError) as error:
+                    failed.append((key, error))
+                    _config.logger.warning("cannot check %s: %s", path, error)
 
     def set_working_dir(self, path):
         """Save the working directory for this client in the user configuration.

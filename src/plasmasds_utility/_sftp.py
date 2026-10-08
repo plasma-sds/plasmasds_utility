@@ -337,6 +337,54 @@ def _run(settings, remote, action, verb, *, timeout, attempts, backoff, use_cach
     ) from last_error
 
 
+def listdir(settings, remote_dir, *, timeout=30, attempts=3, backoff=1.0):
+    """Return the size and modification time of every file in a server directory.
+
+    One request for the whole directory, so checking many files in one directory
+    costs one round trip instead of one per file. The server is always asked,
+    even if the directory was found missing before.
+
+    Parameters
+    ----------
+    settings : dict
+        The merged settings, as for :func:`download`.
+    remote_dir : pathlib.PurePosixPath
+        The directory on the server.
+    timeout, attempts, backoff
+        As for :func:`download`.
+
+    Returns
+    -------
+    dict
+        Maps each entry name to ``(size, mtime)``.
+
+    Raises
+    ------
+    AuthError, TransferError, ConfigError, ValueError
+        As for :func:`download`; a missing directory raises ``NotOnServer``.
+    """
+
+    def ask(sftp):
+        try:
+            entries = sftp.listdir_attr(str(remote_dir))
+        except OSError as error:
+            if _server_file_error(remote_dir, error) is None:
+                raise
+            raise _server_file_error(remote_dir, error) from error
+        return {entry.filename: (entry.st_size, entry.st_mtime) for entry in entries}
+
+    return _run(
+        settings,
+        remote_dir,
+        ask,
+        "list",
+        timeout=timeout,
+        attempts=attempts,
+        backoff=backoff,
+        use_cache=False,
+    )
+
+
 def stat(settings, remote, *, use_cache=True, timeout=30, attempts=3, backoff=1.0):
     """Return the size and modification time of a private file on the server.
 

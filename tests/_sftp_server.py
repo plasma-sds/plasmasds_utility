@@ -1,10 +1,10 @@
 """A minimal SFTP server for the tests, serving files from a local directory.
 
 Paths from the client are taken relative to that directory, like an SSH user's home.
-It accepts one user with one public key, counts connections and stat requests, and
-can be told to drop the first connections, to deny access to paths (or only opening
-them), or to report a larger size than a file has (which makes a download look
-truncated).
+It accepts one user with one public key, counts connections, stat requests and
+directory listings, and can be told to drop the first connections, to deny access to
+paths (or only opening them), or to report a larger size than a file has (which
+makes a download look truncated).
 """
 
 import collections
@@ -60,6 +60,24 @@ class _SFTP(SFTPServerInterface):
 
     lstat = stat
 
+    def list_folder(self, path):
+        self.stub.listings[path] += 1
+        if path in self.stub.denied:
+            return paramiko.SFTP_PERMISSION_DENIED
+        local = self._local(path)
+        try:
+            names = os.listdir(local)
+        except OSError as error:
+            return SFTPServer.convert_errno(error.errno)
+        entries = []
+        for name in names:
+            attributes = SFTPAttributes.from_stat(
+                os.stat(os.path.join(local, name)), filename=name
+            )
+            attributes.st_size += self.stub.extra_size.get(f"{path}/{name}", 0)
+            entries.append(attributes)
+        return entries
+
     def open(self, path, flags, attr):
         if path in self.stub.denied or path in self.stub.denied_open:
             return paramiko.SFTP_PERMISSION_DENIED
@@ -86,6 +104,7 @@ class StubSFTPServer:
         self.denied = set()
         self.denied_open = set()  # stat works, open is refused
         self.stats = collections.Counter()  # stat requests per path
+        self.listings = collections.Counter()  # directory listings per path
         self.extra_size = {}
         self._transports = []
         self._socket = socket.socket()

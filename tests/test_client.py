@@ -1001,3 +1001,37 @@ def test_check_updates_prints_the_fallback_summary_after_fallbacks(servers, caps
     capsys.readouterr()
     client.check_updates()
     assert "1 file(s) came from the public server" in capsys.readouterr().err
+
+
+def test_check_updates_lists_each_private_directory_once(servers, stat_calls):
+    client = DataClient("renate-od")
+    for name in ("a", "b", "c"):
+        servers.put_private(f"d/{name}.h5", b"same", mtime=OLD)
+        place_at(client.local_path(f"d/{name}.h5"), b"same", OLD)
+    servers.put_private("e/x.h5", b"new!", mtime=NEW)
+    place_at(client.local_path("e/x.h5"), b"old!", OLD)
+    assert client.check_updates() == [client.local_path("e/x.h5")]
+    assert servers.sftp.listings["private_html/renate-od/d"] == 1
+    assert servers.sftp.listings["private_html/renate-od/e"] == 1
+    assert stat_calls == []  # no stat per file
+
+
+def test_check_updates_with_a_private_directory_missing_on_the_server(servers, capsys):
+    client = DataClient("renate-od")
+    place(client.local_path("gone/a.h5"), b"mine")
+    place(client.local_path("gone/b.h5"), b"mine")
+    assert client.check_updates() == []
+    assert client.local_path("gone/a.h5").read_bytes() == b"mine"
+    assert "2 not on the server" in capsys.readouterr().err
+
+
+def test_check_updates_after_a_failed_listing_checks_the_rest(servers):
+    client = DataClient("renate-od")
+    servers.put_private("bad/a.h5", b"same", mtime=OLD)
+    place_at(client.local_path("bad/a.h5"), b"same", OLD)
+    servers.sftp.denied.add("private_html/renate-od/bad")
+    servers.put_private("ok/b.h5", b"new!", mtime=NEW)
+    place_at(client.local_path("ok/b.h5"), b"old!", OLD)
+    with pytest.raises(TransferError, match=r"(?s)bad/a\.h5: .*is denied") as error:
+        client.check_updates()
+    assert error.value.updated == [client.local_path("ok/b.h5")]
