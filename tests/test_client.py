@@ -791,6 +791,28 @@ def test_newer_allows_two_seconds_of_rounding(home, ahead, newer):
     assert client_module._newer(path, 4, OLD + ahead) is newer
 
 
+def test_newer_local_copy_is_kept_and_logged(servers, caplog):
+    servers.put_private("a.h5", b"server", mtime=OLD)
+    client = DataClient("renate-od")
+    path = client.local_path("a.h5")
+    place_at(path, b"edited", NEW)  # same size, edited locally
+    with caplog.at_level(logging.INFO, logger="plasmasds_utility"):
+        client.get("a.h5", update="if_newer")
+    assert path.read_bytes() == b"edited"
+    assert "which is newer than the server copy (edited locally?" in caplog.text
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_public_copy_without_last_modified_cannot_be_compared(servers):
+    servers.http.serve("/~data/renate-od/a.h5", {"body": b"same"})  # no header
+    client = DataClient("renate-od")
+    path = client.local_path("a.h5", private=False)
+    place_at(path, b"same", OLD)
+    with pytest.raises(TransferError, match="cannot compare .* no modification time"):
+        client.get("a.h5", private=False, update="if_newer")
+    assert path.read_bytes() == b"same"
+
+
 def test_size_difference_alone_warns_but_keeps_the_copy(servers, caplog):
     servers.put_private("a.h5", b"longer", mtime=OLD)
     client = DataClient("renate-od")
@@ -800,6 +822,7 @@ def test_size_difference_alone_warns_but_keeps_the_copy(servers, caplog):
         client.get("a.h5", update="if_newer")
     assert path.read_bytes() == b"old!"
     assert "(local copy: 4 bytes, server copy: 6 bytes)" in caplog.text
+    assert "edited locally, or changed on the server" in caplog.text
     assert 'update="force"' in caplog.text
 
 
@@ -967,7 +990,7 @@ def test_check_updates_gives_no_notice(servers, capsys):
 
 
 def test_check_updates_prints_the_fallback_summary_after_fallbacks(servers, capsys):
-    servers.put_public("a.h5")
+    servers.put_public("a.h5", mtime=OLD)
     client = DataClient("renate-od")
     client.get("a.h5")  # a fallback to public data
     capsys.readouterr()

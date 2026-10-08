@@ -113,21 +113,41 @@ _TOLERANCE = 2
 def _newer(path, size, mtime):
     """Return whether the server copy (size, mtime) is newer than the local file.
 
-    Newer means a modification time more than ``_TOLERANCE`` seconds later; an
-    unknown server time is never newer. A copy that is not newer but differs in
-    size is kept, with a warning that it may be damaged.
+    Newer means a modification time more than ``_TOLERANCE`` seconds later. A local
+    copy that is newer than the server's is kept (edited locally, or the server
+    copy was restored with an older time) and logged; one that is not newer but
+    differs in size is kept with a warning.
+
+    Raises
+    ------
+    PathError
+        If the local file cannot be read.
+    TransferError
+        If the server sent no modification time, so the copies cannot be compared.
     """
     try:
         local = path.stat()
     except OSError as error:  # removed or replaced while being checked
         raise PathError(f"cannot read {path}: {error}") from error
-    if mtime is not None and int(mtime) - int(local.st_mtime) > _TOLERANCE:
+    if mtime is None:
+        raise TransferError(
+            f"cannot compare {path} with the server copy: the server sent no "
+            "modification time"
+        )
+    if int(mtime) - int(local.st_mtime) > _TOLERANCE:
         return True
+    if int(local.st_mtime) - int(mtime) > _TOLERANCE:
+        _config.logger.info(
+            "kept %s, which is newer than the server copy (edited locally? if the "
+            'server copy was restored, use update="force")',
+            path,
+        )
     if size is not None and size != local.st_size:
         _config.logger.warning(
             "%s differs in size from the server copy (local copy: %d bytes, server "
-            "copy: %d bytes) although the server copy is not newer; it may be "
-            'damaged: replace it with get(key, update="force")',
+            "copy: %d bytes) although the server copy is not newer: it was edited "
+            "locally, or changed on the server without a newer modification time; "
+            'to replace it with the server copy, use get(key, update="force")',
             path,
             local.st_size,
             size,
