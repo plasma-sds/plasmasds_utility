@@ -6,7 +6,12 @@ import sys
 from pathlib import Path
 
 from plasmasds_utility import _config, _https, _paths, _sftp
-from plasmasds_utility.exceptions import AuthError, PathError, TransferError
+from plasmasds_utility.exceptions import (
+    AuthError,
+    ConfigError,
+    PathError,
+    TransferError,
+)
 
 _PREFIX = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 # On Windows these files share a directory with the client directories.
@@ -490,7 +495,8 @@ class DataClient:
         thousands of files takes a while.
         Unlike a single ``get``, a file missing on its server is kept with a
         warning, and the other files are still checked. If private data is not
-        available to you, the ``private/`` tree is not checked further. At the
+        available to you (no usable SSH key), the ``private/`` tree is not checked
+        further. At the
         end a short report is printed to stderr, followed by the public-fallback
         summary if there were fallbacks in this process.
 
@@ -507,15 +513,16 @@ class DataClient:
             exception's ``updated`` and ``missing`` attributes list the files that
             were downloaded again and those missing on their server.
         ConfigError
-            As for :meth:`client_dir`, or if the configured SSH key is missing or
-            unreadable.
+            As for :meth:`client_dir`. A configured SSH key that is missing or
+            unreadable does not raise here: the private data is reported as not
+            checked, like a missing key.
         """
         settings = _config.settings()
         base = self.client_dir()
         updated, missing, failed = [], [], []
         public = _local_files(base / "public")
         private = _local_files(base / "private")
-        checked = len(public) + len(private)
+        keys = {key for _, key in public} | {key for _, key in private}
         for path, key in public:
             url = _paths.public_url(settings, self.prefix, key)
             try:
@@ -528,17 +535,23 @@ class DataClient:
             except (TransferError, PathError) as error:
                 failed.append((key, error))
                 _config.logger.warning("cannot check %s: %s", path, error)
+        unchecked = 0
         try:
             self._check_private(settings, private, updated, missing, failed)
-        except AuthError as error:
+        except (AuthError, ConfigError) as error:
+            done = {p for p in updated + missing} | {k for k, _ in failed}
+            unchecked = sum(
+                1 for path, key in private if path not in done and key not in done
+            )
             failed.append(("private data (not checked)", error))
             _config.logger.warning(
                 "the private data of %s was not checked: %s", self.prefix, error
             )
+        not_checked = unchecked + sum(1 for what, _ in failed if what in keys)
         print(
-            f"plasmasds_utility: checked {checked} file(s) of {self.prefix}: "
-            f"{len(updated)} updated, {len(missing)} not on the server, "
-            f"{len(failed)} could not be checked",
+            f"plasmasds_utility: {len(public) + len(private)} local file(s) of "
+            f"{self.prefix}: {len(updated)} updated, {len(missing)} not on the "
+            f"server, {not_checked} could not be checked",
             file=sys.stderr,
         )
         if _fallbacks:

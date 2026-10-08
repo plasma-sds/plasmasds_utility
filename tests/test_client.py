@@ -932,7 +932,7 @@ def test_check_updates_updates_newer_files_in_both_trees(servers, capsys):
     assert client.local_path("p/same.h5").read_bytes() == b"same"
     assert client.local_path("p/older.h5").read_bytes() == b"mine"  # not newer
     out = capsys.readouterr().err
-    assert "checked 4 file(s) of renate-od: 2 updated, 0 not on the server" in out
+    assert "4 local file(s) of renate-od: 2 updated, 0 not on the server" in out
     assert "public server instead of the private one" not in out
 
 
@@ -989,6 +989,43 @@ def test_check_updates_without_a_key_checks_public_and_raises(servers):
     assert servers.sftp.connections == 1  # the private tree stopped at once
 
 
+def test_check_updates_counts_unchecked_private_files(servers, capsys):
+    write_config(
+        host="127.0.0.1",
+        port=servers.sftp.port,
+        host_keys=_config.settings()["host_keys"],
+        public_url=servers.http.url("/~data"),
+    )
+    client = DataClient("renate-od")
+    place(client.local_path("a.h5"), b"mine")
+    place(client.local_path("b.h5"), b"mine")
+    with pytest.raises(TransferError):
+        client.check_updates()
+    assert "2 local file(s) of renate-od: 0 updated, 0 not on the server, 2 could " in (
+        capsys.readouterr().err
+    )
+
+
+def test_check_updates_with_a_deleted_key_file_keeps_its_results(servers, capsys):
+    servers.put_public("q.h5", b"new!", mtime=NEW)
+    client = DataClient("renate-od")
+    place_at(client.local_path("q.h5", private=False), b"old!", OLD)
+    place(client.local_path("a.h5"), b"mine")
+    settings = _config.settings()
+    write_config(
+        host="127.0.0.1",
+        port=servers.sftp.port,
+        host_keys=settings["host_keys"],
+        public_url=servers.http.url("/~data"),
+        ssh_key=str(servers.sftp.key_file.parent / "deleted_key"),
+    )
+    with pytest.raises(TransferError, match="private data \\(not checked\\)") as error:
+        client.check_updates()
+    assert "does not exist" in str(error.value)
+    assert error.value.updated == [client.local_path("q.h5", private=False)]
+    assert "1 updated" in capsys.readouterr().err
+
+
 def test_check_updates_continues_after_a_failing_file(servers, monkeypatch):
     monkeypatch.setattr(_https, "time", types.SimpleNamespace(sleep=lambda s: None))
     servers.http.serve("/~data/renate-od/bad.h5", {"status": 500})
@@ -1009,7 +1046,7 @@ def test_a_file_vanishing_during_a_check_is_a_path_error(home):
 
 def test_check_updates_with_nothing_local(servers, capsys):
     assert DataClient("renate-od").check_updates() == []
-    assert "checked 0 file(s)" in capsys.readouterr().err
+    assert "0 local file(s) of renate-od" in capsys.readouterr().err
 
 
 def test_check_updates_gives_no_notice(servers, capsys):
