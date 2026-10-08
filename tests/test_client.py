@@ -784,6 +784,13 @@ def test_if_newer_on_a_public_copy(servers, server, local, downloaded):
     assert servers.http.requests["/~data/renate-od/a.h5"] == (1 if downloaded else 0)
 
 
+@pytest.mark.parametrize(("ahead", "newer"), [(1, False), (2, False), (3, True)])
+def test_newer_allows_two_seconds_of_rounding(home, ahead, newer):
+    path = home / "a.h5"
+    place_at(path, b"same", OLD)
+    assert client_module._newer(path, 4, OLD + ahead) is newer
+
+
 def test_size_difference_alone_warns_but_keeps_the_copy(servers, caplog):
     servers.put_private("a.h5", b"longer", mtime=OLD)
     client = DataClient("renate-od")

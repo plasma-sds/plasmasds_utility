@@ -104,18 +104,24 @@ def _explain_update():
     print(f"plasmasds_utility: {text}", file=sys.stderr)
 
 
+# Seconds by which the server time must exceed the local time to count as newer:
+# FAT and exFAT store times in 2-second steps, which would otherwise make some
+# files look newer on every check.
+_TOLERANCE = 2
+
+
 def _newer(path, size, mtime):
     """Return whether the server copy (size, mtime) is newer than the local file.
 
-    Newer means a later modification time in whole seconds; an unknown server time
-    is never newer. A copy that is not newer but differs in size is kept, with a
-    warning that it may be damaged.
+    Newer means a modification time more than ``_TOLERANCE`` seconds later; an
+    unknown server time is never newer. A copy that is not newer but differs in
+    size is kept, with a warning that it may be damaged.
     """
     try:
         local = path.stat()
     except OSError as error:  # removed or replaced while being checked
         raise PathError(f"cannot read {path}: {error}") from error
-    if mtime is not None and int(mtime) > int(local.st_mtime):
+    if mtime is not None and int(mtime) - int(local.st_mtime) > _TOLERANCE:
         return True
     if size is not None and size != local.st_size:
         _config.logger.warning(
