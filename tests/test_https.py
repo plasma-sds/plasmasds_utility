@@ -216,4 +216,34 @@ def test_unusable_target_directory_is_a_path_error(home):
 
 def test_attempts_must_be_positive(home):
     with pytest.raises(ValueError, match="attempts must be at least 1"):
-        _https.download("https://example.invalid/a", home / "a", attempts=0)
+        _https.download("https://example.invalid/a", home / "new" / "a", attempts=0)
+    assert not (home / "new").exists()  # checked before any I/O
+
+
+def test_head_returns_size_and_mtime(http_server):
+    http_server.serve("/a.txt", {"body": b"hello", "last_modified": LAST_MODIFIED})
+    assert _https.head(http_server.url("/a.txt")) == (5, TIMESTAMP)
+    assert http_server.requests["HEAD /a.txt"] == 1
+    assert http_server.requests["/a.txt"] == 0  # no content transferred
+
+
+def test_head_without_headers_returns_none(http_server, caplog):
+    http_server.serve("/a.txt", {"body": b"x", "length": "five"})
+    with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
+        assert _https.head(http_server.url("/a.txt")) == (None, None)
+    # No download-time warning: the caller reports "cannot compare" instead.
+    assert "no usable Last-Modified" not in caplog.text
+
+
+def test_head_of_a_missing_file(http_server, sleeps):
+    with pytest.raises(TransferError, match="not on the public server"):
+        _https.head(http_server.url("/missing.txt"))
+    assert sleeps == []
+
+
+def test_head_retries_server_errors(http_server, sleeps):
+    http_server.serve("/a.txt", {"status": 500})
+    with pytest.raises(TransferError, match="cannot check .* after 3 attempts"):
+        _https.head(http_server.url("/a.txt"))
+    assert http_server.requests["HEAD /a.txt"] == 3
+    assert sleeps == [1.0, 2.0]

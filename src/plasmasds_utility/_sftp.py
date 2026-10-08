@@ -21,6 +21,7 @@ One SFTP transfer runs at a time per process; parallel calls take turns.
 """
 
 import atexit
+import stat as stat_module
 import threading
 import time
 
@@ -216,7 +217,9 @@ def close_all():
 atexit.register(close_all)
 
 
-def download(settings, remote, target, *, timeout=30, attempts=3, backoff=1.0):
+def download(
+    settings, remote, target, *, use_cache=True, timeout=30, attempts=3, backoff=1.0
+):
     """Download a private file over SFTP to target.
 
     The local file gets the server's modification time.
@@ -230,6 +233,8 @@ def download(settings, remote, target, *, timeout=30, attempts=3, backoff=1.0):
     target : pathlib.Path
         Where to store it; missing directories are created, and an existing file is
         replaced only when the download is complete.
+    use_cache : bool, default True
+        False asks the server again for a file remembered as missing.
     timeout : float, default 30
         Seconds to wait for the connection, the login and each read.
     attempts : int, default 3
@@ -260,16 +265,39 @@ def download(settings, remote, target, *, timeout=30, attempts=3, backoff=1.0):
     ValueError
         If ``attempts`` is less than 1.
     """
+    _files.make_parent(target)
+    _run(
+        settings,
+        remote,
+        lambda sftp: _fetch(sftp, remote, target),
+        "download",
+        timeout=timeout,
+        attempts=attempts,
+        backoff=backoff,
+        use_cache=use_cache,
+    )
+    _config.logger.info("downloaded %s to %s", remote, target)
+    return target
+
+
+def _run(settings, remote, action, verb, *, timeout, attempts, backoff, use_cache):
+    """Call action(sftp) on a session for settings, with bounded retries.
+
+    Opens or reuses the session, raises remembered failures at once, remembers
+    new AuthErrors and NotOnServer, and retries other connection failures with a
+    new session. With ``use_cache`` false, a file remembered as missing is asked
+    for again. ``verb`` names the operation in messages. Returns the result of
+    action.
+    """
     if attempts < 1:
         raise ValueError(f"attempts must be at least 1, got {attempts}")
     server = _server(settings)
-    _files.make_parent(target)
     for attempt in range(1, attempts + 1):
         with _lock:
             if server in _unavailable:
                 # A fresh traceback each time, or the cached one grows per call.
                 raise _unavailable[server].with_traceback(None)
-            if (server, str(remote)) in _not_on_server:
+            if use_cache and (server, str(remote)) in _not_on_server:
                 raise NotOnServer(f"{remote} is not on the private server")
             locked_key = None
             if server in _sessions and not _alive(_sessions[server][0]):
@@ -280,7 +308,9 @@ def download(settings, remote, target, *, timeout=30, attempts=3, backoff=1.0):
                     key, locked = _load_key(key_path)
                     locked_key = key_path if locked else None
                     _sessions[server] = _connect(settings, timeout, key)
-                _fetch(_sessions[server][1], remote, target)
+                result = action(_sessions[server][1])
+                _not_on_server.discard((server, str(remote)))
+                return result
             except NotOnServer:
                 _not_on_server.add((server, str(remote)))
                 raise
@@ -292,11 +322,9 @@ def download(settings, remote, target, *, timeout=30, attempts=3, backoff=1.0):
                     raise auth_error from error
                 _close(server)
                 last_error = error
-            else:
-                _config.logger.info("downloaded %s to %s", remote, target)
-                return target
         _config.logger.warning(
-            "download of %s failed (attempt %d of %d): %s",
+            "%s of %s failed (attempt %d of %d): %s",
+            verb,
             remote,
             attempt,
             attempts,
@@ -305,9 +333,114 @@ def download(settings, remote, target, *, timeout=30, attempts=3, backoff=1.0):
         if attempt < attempts:
             time.sleep(backoff * 2 ** (attempt - 1))
     raise TransferError(
-        f"cannot download {remote} from {server[0]} after {attempts} attempts: "
+        f"cannot {verb} {remote} from {server[0]} after {attempts} attempts: "
         f"{last_error}"
     ) from last_error
+
+
+def listdir(settings, remote_dir, *, timeout=30, attempts=3, backoff=1.0):
+    """Return the size and modification time of every file in a server directory.
+
+    One request for the whole directory, so checking many files in one directory
+    costs one round trip instead of one per file. The server is always asked,
+    even if the directory was found missing before. Only regular files are
+    returned: subdirectories and broken links are left out, and a symbolic link
+    is described by its target (one extra request each), as :func:`stat` does.
+
+    Parameters
+    ----------
+    settings : dict
+        The merged settings, as for :func:`download`.
+    remote_dir : pathlib.PurePosixPath
+        The directory on the server.
+    timeout, attempts, backoff
+        As for :func:`download`.
+
+    Returns
+    -------
+    dict
+        Maps each entry name to ``(size, mtime)``.
+
+    Raises
+    ------
+    AuthError, TransferError, ConfigError, ValueError
+        As for :func:`download`; a missing directory raises ``NotOnServer``.
+    """
+
+    def ask(sftp):
+        try:
+            entries = sftp.listdir_attr(str(remote_dir))
+        except OSError as error:
+            if _server_file_error(remote_dir, error) is None:
+                raise
+            raise _server_file_error(remote_dir, error) from error
+        files = {}
+        for entry in entries:
+            name, attributes = entry.filename, entry
+            if attributes.st_mode is not None and stat_module.S_ISLNK(
+                attributes.st_mode
+            ):
+                # A listing describes the link itself; compare its target, as
+                # get() does.
+                try:
+                    attributes = sftp.stat(f"{remote_dir}/{name}")
+                except OSError:
+                    continue  # a broken link is not a file
+            mode = attributes.st_mode
+            if mode is None or stat_module.S_ISREG(mode):
+                files[name] = (attributes.st_size, attributes.st_mtime)
+        return files
+
+    return _run(
+        settings,
+        remote_dir,
+        ask,
+        "list",
+        timeout=timeout,
+        attempts=attempts,
+        backoff=backoff,
+        use_cache=False,
+    )
+
+
+def stat(settings, remote, *, use_cache=True, timeout=30, attempts=3, backoff=1.0):
+    """Return the size and modification time of a private file on the server.
+
+    Parameters
+    ----------
+    settings, remote, use_cache, timeout, attempts, backoff
+        As for :func:`download`.
+
+    Returns
+    -------
+    tuple
+        ``(size, mtime)``: the size in bytes and the POSIX modification time.
+
+    Raises
+    ------
+    AuthError, TransferError, ConfigError, ValueError
+        As for :func:`download`.
+    """
+
+    def ask(sftp):
+        try:
+            attributes = sftp.stat(str(remote))
+        except OSError as error:
+            if _server_file_error(remote, error) is None:
+                raise
+            raise _server_file_error(remote, error) from error
+        return attributes.st_size, attributes.st_mtime
+
+    return _run(
+        settings,
+        remote,
+        ask,
+        "check",
+        timeout=timeout,
+        attempts=attempts,
+        backoff=backoff,
+        use_cache=use_cache,
+    )
 
 
 def _server_file_error(remote, error):
