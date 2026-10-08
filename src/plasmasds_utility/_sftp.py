@@ -21,6 +21,7 @@ One SFTP transfer runs at a time per process; parallel calls take turns.
 """
 
 import atexit
+import stat as stat_module
 import threading
 import time
 
@@ -342,7 +343,9 @@ def listdir(settings, remote_dir, *, timeout=30, attempts=3, backoff=1.0):
 
     One request for the whole directory, so checking many files in one directory
     costs one round trip instead of one per file. The server is always asked,
-    even if the directory was found missing before.
+    even if the directory was found missing before. Only regular files are
+    returned: subdirectories and broken links are left out, and a symbolic link
+    is described by its target (one extra request each), as :func:`stat` does.
 
     Parameters
     ----------
@@ -371,7 +374,22 @@ def listdir(settings, remote_dir, *, timeout=30, attempts=3, backoff=1.0):
             if _server_file_error(remote_dir, error) is None:
                 raise
             raise _server_file_error(remote_dir, error) from error
-        return {entry.filename: (entry.st_size, entry.st_mtime) for entry in entries}
+        files = {}
+        for entry in entries:
+            name, attributes = entry.filename, entry
+            if attributes.st_mode is not None and stat_module.S_ISLNK(
+                attributes.st_mode
+            ):
+                # A listing describes the link itself; compare its target, as
+                # get() does.
+                try:
+                    attributes = sftp.stat(f"{remote_dir}/{name}")
+                except OSError:
+                    continue  # a broken link is not a file
+            mode = attributes.st_mode
+            if mode is None or stat_module.S_ISREG(mode):
+                files[name] = (attributes.st_size, attributes.st_mtime)
+        return files
 
     return _run(
         settings,

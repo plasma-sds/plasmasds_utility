@@ -1051,6 +1051,15 @@ def test_check_updates_with_a_private_directory_missing_on_the_server(servers, c
     assert "2 not on the server" in capsys.readouterr().err
 
 
+def test_check_updates_treats_a_server_directory_as_missing(servers, capsys):
+    servers.put_private("x/inner.h5", b"x")  # on the server, x is a directory
+    client = DataClient("renate-od")
+    place(client.local_path("x"), b"mine")  # locally, x is a file
+    assert client.check_updates() == []
+    assert client.local_path("x").read_bytes() == b"mine"
+    assert "1 not on the server" in capsys.readouterr().err
+
+
 def test_check_updates_after_a_failed_listing_checks_the_rest(servers):
     client = DataClient("renate-od")
     servers.put_private("bad/a.h5", b"same", mtime=OLD)

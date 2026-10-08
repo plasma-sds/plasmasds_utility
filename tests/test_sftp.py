@@ -517,3 +517,18 @@ def test_listdir_of_a_denied_directory(served):
     served.denied.add(str(REMOTE.parent))
     with pytest.raises(TransferError, match="is denied"):
         _sftp.listdir(_config.settings(), REMOTE.parent)
+
+
+def test_listdir_leaves_out_directories(served, tmp_path):
+    (tmp_path / "server" / Path(*REMOTE.parent.parts) / "sub").mkdir()
+    assert set(_sftp.listdir(_config.settings(), REMOTE.parent)) == {"x.h5"}
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need privileges on Windows")
+def test_listdir_describes_a_link_by_its_target(served, tmp_path):
+    directory = tmp_path / "server" / Path(*REMOTE.parent.parts)
+    os.symlink(directory / "x.h5", directory / "link.h5")
+    os.symlink(directory / "gone.h5", directory / "broken.h5")
+    listing = _sftp.listdir(_config.settings(), REMOTE.parent)
+    assert listing["link.h5"] == listing["x.h5"] == (len(b"private data"), TIMESTAMP)
+    assert "broken.h5" not in listing

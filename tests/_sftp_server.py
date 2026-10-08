@@ -71,8 +71,9 @@ class _SFTP(SFTPServerInterface):
             return SFTPServer.convert_errno(error.errno)
         entries = []
         for name in names:
+            # Like OpenSSH: a listing describes links themselves (lstat).
             attributes = SFTPAttributes.from_stat(
-                os.stat(os.path.join(local, name)), filename=name
+                os.lstat(os.path.join(local, name)), filename=name
             )
             attributes.st_size += self.stub.extra_size.get(f"{path}/{name}", 0)
             entries.append(attributes)
