@@ -80,8 +80,11 @@ def _summary_at_exit():
 _noticed = False  # whether the unchecked-local-data notice was given
 
 
-def _notice_unchecked(prefix):
-    """Say once per process that local data is used without checking the server.
+_UPDATE_CHOICES = ("never", "if_newer", "force")
+
+
+def _explain_update():
+    """Print once per process what get() does with local copies, and the options.
 
     A notice, not a warning: it is printed to stderr like the exit summary and
     logged at INFO, so that warnings keep meaning that something went wrong.
@@ -91,9 +94,11 @@ def _notice_unchecked(prefix):
         return
     _noticed = True
     text = (
-        "using local data without checking the server for newer versions; to "
-        f"check, call DataClient({prefix!r}).check_updates(), or "
-        "get(key, check_server=True)"
+        "get() uses a local copy without asking the server for a newer version "
+        '(update="never", the default), and downloads a file that is not on disk. '
+        'Other options: update="if_newer" downloads again if the server copy is '
+        'newer; update="force" downloads again regardless. '
+        "DataClient(prefix).check_updates() checks every local file of a client."
     )
     _config.logger.info(text)
     print(f"plasmasds_utility: {text}", file=sys.stderr)
@@ -116,7 +121,7 @@ def _newer(path, size, mtime):
         _config.logger.warning(
             "%s differs in size from the server copy (local copy: %d bytes, server "
             "copy: %d bytes) although the server copy is not newer; it may be "
-            "damaged: replace it with get(key, check_server=True, force=True)",
+            'damaged: replace it with get(key, update="force")',
             path,
             local.st_size,
             size,
@@ -291,7 +296,7 @@ class DataClient:
         _paths.check_key(key)  # before any I/O
         return _paths.local_path(self.client_dir(), key, private=private)
 
-    def get(self, key, *, private=None, check_server=False, force=False):
+    def get(self, key, *, private=None, update="never"):
         """Return the local path of a data file, downloading it first if needed.
 
         ``get`` does not open the file: it returns a :class:`pathlib.Path` for the
@@ -316,16 +321,19 @@ class DataClient:
         a process with a warning, every one in the log file, and all of them in a
         summary at exit and in :func:`show_public_fallbacks`.
 
-        By default a local copy is used without asking its server whether it has
-        a newer version; the first time this happens for private data in a
-        process, a notice says so. With ``check_server=True`` the local copy is
-        compared with its server and downloaded again only if the server copy is
-        newer (modification time, whole seconds); a copy that is not newer but
-        differs in size is kept with a warning that it may be damaged. With
-        ``check_server=True, force=True`` it is downloaded again regardless, for
-        example when it is damaged. If a requested check cannot be done, the
-        local copy is kept and
-        :class:`TransferError` is raised. Without a local copy, the private
+        ``update`` decides what happens to a file that is already on disk; a file
+        that is not on disk is always downloaded:
+
+        - ``"never"`` (default): the local copy is used without asking the server;
+        - ``"if_newer"``: the local copy is compared with its server and
+          downloaded again only if the server copy is newer (modification time);
+          a copy that is not newer but differs in size is kept with a warning;
+        - ``"force"``: the local copy is downloaded again regardless, for example
+          when it is damaged.
+
+        The first call in a process prints these options. If a requested check
+        cannot be done, the local copy is kept and :class:`TransferError` is
+        raised. Without a local copy, the private
         server is asked even about a file it was found not to have earlier in
         the process (with the default, that answer is remembered, so a local
         public copy normally costs one question per file and process; use
@@ -338,12 +346,8 @@ class DataClient:
         private : bool or None, default None
             True for private data only, False for public data only (the private
             server is never contacted), None for the best available.
-        check_server : bool, default False
-            Compare a local copy with its server and download it again if the
-            server copy is newer.
-        force : bool, default False
-            With ``check_server=True``, download the file again even if the local
-            copy is up to date.
+        update : {"never", "if_newer", "force"}, default "never"
+            What to do with a local copy (see above).
 
         Returns
         -------
@@ -353,7 +357,7 @@ class DataClient:
         Raises
         ------
         ValueError
-            If ``force=True`` is given without ``check_server=True``.
+            If ``update`` is not one of the values above.
         PathError
             If the key is invalid, something other than a file is in the way, or
             the file cannot be written.
@@ -367,17 +371,21 @@ class DataClient:
             As for :meth:`client_dir`, or if the configured SSH key is missing or
             unreadable.
         """
-        if force and not check_server:
-            raise ValueError("force=True can only be used with check_server=True")
+        if update not in _UPDATE_CHOICES:
+            raise ValueError(
+                f"update must be one of {', '.join(map(repr, _UPDATE_CHOICES))}, "
+                f"got {update!r}"
+            )
+        _explain_update()
         settings = _config.settings()
-        refresh = check_server
+        refresh = update != "never"
+        force = update == "force"
         reason = None
         if private is not False:
             private_path = self.local_path(key, private=True)
             remote = _paths.private_remote(settings, self.prefix, key)
             if _present(private_path, key):
                 if not refresh:
-                    _notice_unchecked(self.prefix)
                     return private_path
                 try:
                     _refresh_private(settings, remote, private_path, force)
@@ -418,7 +426,7 @@ class DataClient:
         """Check every local data file against its server and download newer ones.
 
         Walks the local ``public/`` and ``private/`` trees of this client and
-        compares each file with its server, as ``get(key, check_server=True)``
+        compares each file with its server, as ``get(key, update="if_newer")``
         does, downloading it again where the server copy is newer. Temporary and
         hidden files are skipped, including anything inside a hidden directory,
         and so is a file whose name is not a valid key (with a warning).

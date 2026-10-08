@@ -707,43 +707,40 @@ def place_at(path, body, mtime):
 
 
 def notices(capsys):
-    """Return the unchecked-data notices printed to stderr so far."""
+    """Return the update-option explanations printed to stderr so far."""
     err = capsys.readouterr().err
-    return [line for line in err.splitlines() if "without checking the server" in line]
+    return [line for line in err.splitlines() if "get() uses a local copy" in line]
 
 
-def test_local_private_copy_gives_one_notice(servers, capsys, caplog):
+def test_first_get_explains_the_update_options_once(servers, capsys, caplog):
+    servers.put_private("a.h5")
+    servers.put_private("b.h5", b"mine", mtime=OLD)
     client = DataClient("renate-od")
-    place(client.local_path("a.h5"), b"mine")
-    place(client.local_path("b.h5"), b"mine")
+    place_at(client.local_path("b.h5"), b"mine", OLD)
     with caplog.at_level(logging.INFO, logger="plasmasds_utility"):
-        client.get("a.h5")
-        client.get("b.h5")
+        client.get("a.h5")  # downloaded
+        client.get("b.h5")  # local copy
+        client.get("b.h5", update="if_newer")
     (notice,) = notices(capsys)
-    assert notice.startswith("plasmasds_utility: using local data without checking")
-    assert "DataClient('renate-od').check_updates()" in notice
-    assert "get(key, check_server=True)" in notice
-    assert servers.sftp.connections == 0
+    assert notice.startswith("plasmasds_utility: get() uses a local copy")
+    for text in (
+        'update="never", the default',
+        "downloads a file that is not on disk",
+        'update="if_newer" downloads again if the server copy is newer',
+        'update="force" downloads again regardless',
+        "check_updates()",
+    ):
+        assert text in notice
     # A notice, not a warning: logged at INFO only.
-    levels = {r.levelno for r in caplog.records if "without checking" in r.getMessage()}
+    levels = {r.levelno for r in caplog.records if "get() uses" in r.getMessage()}
     assert levels == {logging.INFO}
 
 
-def test_no_notice_when_the_server_is_checked(servers, capsys):
+def test_local_copy_is_used_without_contacting_the_server(servers):
     client = DataClient("renate-od")
-    servers.put_private("a.h5", b"mine", mtime=OLD)
-    place_at(client.local_path("a.h5"), b"mine", OLD)
-    client.get("a.h5", check_server=True)
-    assert notices(capsys) == []
-
-
-def test_no_notice_for_downloads_or_public_copies(servers, capsys):
-    servers.put_private("a.h5")
-    servers.put_public("b.h5")
-    client = DataClient("renate-od")
-    client.get("a.h5")  # downloaded, not an unchecked local copy
-    client.get("b.h5", private=False)
-    assert notices(capsys) == []
+    place(client.local_path("a.h5"), b"mine")
+    assert client.get("a.h5").read_bytes() == b"mine"
+    assert servers.sftp.connections == 0
 
 
 @pytest.mark.parametrize(
@@ -757,12 +754,12 @@ def test_no_notice_for_downloads_or_public_copies(servers, capsys):
         ((b"same", OLD), (b"mine", NEW), False),  # server older, same size
     ],
 )
-def test_check_server_on_a_private_copy(servers, stat_calls, server, local, downloaded):
+def test_if_newer_on_a_private_copy(servers, stat_calls, server, local, downloaded):
     servers.put_private("a.h5", server[0], mtime=server[1])
     client = DataClient("renate-od")
     path = client.local_path("a.h5")
     place_at(path, *local)
-    assert client.get("a.h5", check_server=True) == path
+    assert client.get("a.h5", update="if_newer") == path
     assert path.read_bytes() == (server[0] if downloaded else local[0])
     assert len(stat_calls) == 1
 
@@ -776,12 +773,12 @@ def test_check_server_on_a_private_copy(servers, stat_calls, server, local, down
         ((b"longer", OLD), (b"old!", OLD), False),
     ],
 )
-def test_check_server_on_a_public_copy(servers, server, local, downloaded):
+def test_if_newer_on_a_public_copy(servers, server, local, downloaded):
     servers.put_public("a.h5", server[0], mtime=server[1])
     client = DataClient("renate-od")
     path = client.local_path("a.h5", private=False)
     place_at(path, *local)
-    client.get("a.h5", private=False, check_server=True)
+    client.get("a.h5", private=False, update="if_newer")
     assert path.read_bytes() == (server[0] if downloaded else local[0])
     assert servers.http.requests["HEAD /~data/renate-od/a.h5"] == 1
     assert servers.http.requests["/~data/renate-od/a.h5"] == (1 if downloaded else 0)
@@ -793,19 +790,19 @@ def test_size_difference_alone_warns_but_keeps_the_copy(servers, caplog):
     path = client.local_path("a.h5")
     place_at(path, b"old!", OLD)
     with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
-        client.get("a.h5", check_server=True)
+        client.get("a.h5", update="if_newer")
     assert path.read_bytes() == b"old!"
     assert "(local copy: 4 bytes, server copy: 6 bytes)" in caplog.text
-    assert "check_server=True, force=True" in caplog.text
+    assert 'update="force"' in caplog.text
 
 
 def test_force_downloads_a_private_copy_again(servers, stat_calls):
     servers.put_private("a.h5", b"good", mtime=OLD)
     client = DataClient("renate-od")
     place_at(client.local_path("a.h5"), b"bad!", OLD)  # same size and time: damaged
-    assert client.get("a.h5", check_server=True).read_bytes() == b"bad!"
+    assert client.get("a.h5", update="if_newer").read_bytes() == b"bad!"
     stat_calls.clear()
-    path = client.get("a.h5", check_server=True, force=True)
+    path = client.get("a.h5", update="force")
     assert path.read_bytes() == b"good"
     assert stat_calls == []  # no comparison, just the download
 
@@ -814,16 +811,17 @@ def test_force_downloads_a_public_copy_again(servers):
     servers.put_public("a.h5", b"good", mtime=OLD)
     client = DataClient("renate-od")
     place_at(client.local_path("a.h5", private=False), b"bad!", OLD)
-    path = client.get("a.h5", private=False, check_server=True, force=True)
+    path = client.get("a.h5", private=False, update="force")
     assert path.read_bytes() == b"good"
     assert servers.http.requests["HEAD /~data/renate-od/a.h5"] == 0
 
 
-@pytest.mark.parametrize("private", [None, True, False])
-def test_force_without_check_server_is_an_error(home, private):
-    with pytest.raises(ValueError, match="force=True can only be used with"):
-        DataClient("renate-od").get("a.h5", private=private, force=True)
-    assert list(home.iterdir()) == []  # before any I/O
+@pytest.mark.parametrize("update", ["always", "", None, True, "Never"])
+def test_invalid_update_is_an_error_before_any_io(home, capsys, update):
+    with pytest.raises(ValueError, match="update must be one of 'never', 'if_newer'"):
+        DataClient("renate-od").get("a.h5", update=update)
+    assert list(home.iterdir()) == []
+    assert notices(capsys) == []
 
 
 def test_failed_check_keeps_the_local_copy_and_raises(servers):
@@ -837,7 +835,7 @@ def test_failed_check_keeps_the_local_copy_and_raises(servers):
     path = client.local_path("a.h5")
     place(path, b"mine")
     with pytest.raises(TransferError, match="kept the local copy .* could not be"):
-        client.get("a.h5", check_server=True)
+        client.get("a.h5", update="if_newer")
     assert path.read_bytes() == b"mine"
     assert client.get("a.h5") == path  # still usable without the check
 
@@ -846,18 +844,18 @@ def test_check_of_a_local_copy_missing_on_the_server_raises(servers):
     client = DataClient("renate-od")
     place(client.local_path("a.h5"), b"mine")
     with pytest.raises(TransferError, match="not on the private server") as error:
-        client.get("a.h5", check_server=True)
+        client.get("a.h5", update="if_newer")
     assert "could not be checked" not in str(error.value)  # it was checked
     assert client.local_path("a.h5").read_bytes() == b"mine"
 
 
-def test_check_server_finds_a_file_uploaded_during_the_session(servers):
+def test_if_newer_finds_a_file_uploaded_during_the_session(servers):
     servers.put_public("a.h5", b"dummy")
     client = DataClient("renate-od")
     assert client.get("a.h5").read_bytes() == b"dummy"  # not on the private server
     servers.put_private("a.h5", b"real")
     assert client.get("a.h5").read_bytes() == b"dummy"  # remembered as missing
-    assert client.get("a.h5", check_server=True).read_bytes() == b"real"
+    assert client.get("a.h5", update="if_newer").read_bytes() == b"real"
 
 
 def test_check_updates_updates_newer_files_in_both_trees(servers, capsys):

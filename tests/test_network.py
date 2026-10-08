@@ -33,12 +33,12 @@ def test_public_download_from_the_data_server(home):
     assert path.read_bytes() == b"Data access test file"
     assert path.stat().st_mtime == 1519422481  # Last-Modified: 2018-02-23 21:48:01 UTC
     # Up to date: the HEAD check leaves it alone.
-    assert client.get(PUBLIC_KEY, private=False, check_server=True) == path
+    assert client.get(PUBLIC_KEY, private=False, update="if_newer") == path
     assert path.stat().st_mtime == 1519422481
     # Out of date (older and a different size): downloaded again.
     path.write_bytes(b"stale")
     os.utime(path, (1_000_000_000, 1_000_000_000))
-    client.get(PUBLIC_KEY, private=False, check_server=True)
+    client.get(PUBLIC_KEY, private=False, update="if_newer")
     assert path.read_bytes() == b"Data access test file"
     assert path.stat().st_mtime == 1519422481
 
@@ -56,7 +56,7 @@ def test_private_download_from_the_data_server(home):
     assert not client.local_path(PRIVATE_KEY, private=False).exists()
     server_mtime = path.stat().st_mtime
     # Up to date: the SFTP stat check leaves it alone.
-    client.get(PRIVATE_KEY, private=True, check_server=True)
+    client.get(PRIVATE_KEY, private=True, update="if_newer")
     assert path.stat().st_mtime == server_mtime
     # Out of date: check_updates downloads it again.
     path.write_bytes(b"stale")
