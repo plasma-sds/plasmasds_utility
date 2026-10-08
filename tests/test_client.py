@@ -905,7 +905,7 @@ def test_check_updates_updates_newer_files_in_both_trees(servers, capsys):
     assert client.local_path("p/new.h5").read_bytes() == b"new!"
     assert client.local_path("p/same.h5").read_bytes() == b"same"
     assert client.local_path("p/older.h5").read_bytes() == b"mine"  # not newer
-    out = capsys.readouterr().out
+    out = capsys.readouterr().err
     assert "checked 4 file(s) of renate-od: 2 updated, 0 not on the server" in out
     assert "public server instead of the private one" not in out
 
@@ -937,7 +937,7 @@ def test_check_updates_keeps_files_missing_on_the_server(servers, capsys, caplog
         assert client.check_updates() == []
     assert client.local_path("gone.h5").read_bytes() == b"mine"
     assert "not on the private server" in caplog.text
-    assert "1 not on the server" in capsys.readouterr().out
+    assert "1 not on the server" in capsys.readouterr().err
 
 
 def test_check_updates_without_a_key_checks_public_and_raises(servers):
@@ -952,9 +952,13 @@ def test_check_updates_without_a_key_checks_public_and_raises(servers):
     place_at(client.local_path("q.h5", private=False), b"old!", OLD)
     place(client.local_path("a.h5"), b"mine")
     place(client.local_path("b.h5"), b"mine")
-    with pytest.raises(TransferError, match="could not check 1 file") as error:
+    with pytest.raises(TransferError, match="could not check everything") as error:
         client.check_updates()
+    assert "private data (not checked): " in str(error.value)
     assert "no SSH key found" in str(error.value)
+    assert str(error.value).count("\n") == 1  # one entry, not one per file
+    assert error.value.updated == [client.local_path("q.h5", private=False)]
+    assert error.value.missing == []
     assert client.local_path("q.h5", private=False).read_bytes() == b"new!"
     assert servers.sftp.connections == 1  # the private tree stopped at once
 
@@ -966,8 +970,9 @@ def test_check_updates_continues_after_a_failing_file(servers, monkeypatch):
     client = DataClient("renate-od")
     place_at(client.local_path("bad.h5", private=False), b"old!", OLD)
     place_at(client.local_path("good.h5", private=False), b"old!", OLD)
-    with pytest.raises(TransferError, match=r"could not check 1 file(?s:.)*bad\.h5"):
+    with pytest.raises(TransferError, match=r"could not check(?s:.)*bad\.h5") as error:
         client.check_updates()
+    assert error.value.updated == [client.local_path("good.h5", private=False)]
     assert client.local_path("good.h5", private=False).read_bytes() == b"new!"
 
 
@@ -978,7 +983,7 @@ def test_a_file_vanishing_during_a_check_is_a_path_error(home):
 
 def test_check_updates_with_nothing_local(servers, capsys):
     assert DataClient("renate-od").check_updates() == []
-    assert "checked 0 file(s)" in capsys.readouterr().out
+    assert "checked 0 file(s)" in capsys.readouterr().err
 
 
 def test_check_updates_gives_no_notice(servers, capsys):
@@ -995,4 +1000,4 @@ def test_check_updates_prints_the_fallback_summary_after_fallbacks(servers, caps
     client.get("a.h5")  # a fallback to public data
     capsys.readouterr()
     client.check_updates()
-    assert "1 file(s) came from the public server" in capsys.readouterr().out
+    assert "1 file(s) came from the public server" in capsys.readouterr().err

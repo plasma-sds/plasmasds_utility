@@ -462,8 +462,8 @@ class DataClient:
         Unlike a single ``get``, a file missing on its server is kept with a
         warning, and the other files are still checked. If private data is not
         available to you, the ``private/`` tree is not checked further. At the
-        end a short report is printed, followed by the public-fallback summary if
-        there were fallbacks in this process.
+        end a short report is printed to stderr, followed by the public-fallback
+        summary if there were fallbacks in this process.
 
         Returns
         -------
@@ -473,8 +473,10 @@ class DataClient:
         Raises
         ------
         TransferError
-            After the whole check, if any file could not be checked; the message
-            lists them. Files that could be checked are already updated.
+            After the whole check, if anything could not be checked; the message
+            lists it. Files that could be checked are already updated: the
+            exception's ``updated`` and ``missing`` attributes list the files that
+            were downloaded again and those missing on their server.
         ConfigError
             As for :meth:`client_dir`, or if the configured SSH key is missing or
             unreadable.
@@ -511,9 +513,9 @@ class DataClient:
                         url = _paths.public_url(settings, self.prefix, key)
                         changed = _refresh_public(url, path, False)
                 except AuthError as error:
-                    failed.append((key, error))
+                    failed.append(("private data (not checked)", error))
                     _config.logger.warning(
-                        "cannot check the private data of %s: %s", self.prefix, error
+                        "the private data of %s was not checked: %s", self.prefix, error
                     )
                     break
                 except (_sftp.NotOnServer, _https.NotOnServer) as error:
@@ -529,15 +531,19 @@ class DataClient:
         print(
             f"plasmasds_utility: checked {checked} file(s) of {self.prefix}: "
             f"{len(updated)} updated, {len(missing)} not on the server, "
-            f"{len(failed)} could not be checked"
+            f"{len(failed)} could not be checked",
+            file=sys.stderr,
         )
         if _fallbacks:
-            print(_fallback_summary())
+            print(f"plasmasds_utility: {_fallback_summary()}", file=sys.stderr)
         if failed:
-            lines = "\n".join(f"  {key}: {error}" for key, error in failed)
-            raise TransferError(
-                f"could not check {len(failed)} file(s) of {self.prefix}:\n{lines}"
+            lines = "\n".join(f"  {what}: {error}" for what, error in failed)
+            error = TransferError(
+                f"could not check everything of {self.prefix}:\n{lines}"
             )
+            error.updated = updated
+            error.missing = missing
+            raise error
         return updated
 
     def set_working_dir(self, path):
