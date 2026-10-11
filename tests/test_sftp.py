@@ -447,3 +447,88 @@ def test_shipped_host_key_parses_for_a_non_standard_port():
 def test_attempts_must_be_positive(home):
     with pytest.raises(ValueError, match="attempts must be at least 1"):
         download(home / "x.h5", attempts=0)
+
+
+def test_stat_returns_size_and_mtime(served):
+    assert _sftp.stat(_config.settings(), REMOTE) == (len(b"private data"), TIMESTAMP)
+    assert served.stats[str(REMOTE)] == 1
+
+
+def test_stat_reuses_the_session(served, home):
+    download(home / "x.h5")
+    _sftp.stat(_config.settings(), REMOTE)
+    assert served.connections == 1
+
+
+def test_stat_of_a_missing_file_is_remembered(sftp_server, sleeps):
+    settings = _config.settings()
+    for _ in range(2):
+        with pytest.raises(_sftp.NotOnServer):
+            _sftp.stat(settings, REMOTE)
+    assert sftp_server.stats[str(REMOTE)] == 1
+    assert sleeps == []
+
+
+def test_explicit_check_bypasses_the_missing_file_memory(sftp_server, tmp_path, home):
+    settings = _config.settings()
+    with pytest.raises(_sftp.NotOnServer):
+        _sftp.stat(settings, REMOTE)
+    # The file is uploaded during the session.
+    path = tmp_path / "server" / Path(*REMOTE.parts)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"new")
+    with pytest.raises(_sftp.NotOnServer):
+        _sftp.stat(settings, REMOTE)  # still remembered
+    assert _sftp.stat(settings, REMOTE, use_cache=False)[0] == 3
+    _sftp.stat(settings, REMOTE)  # found again, so no longer remembered as missing
+    download(home / "x.h5")
+    assert (home / "x.h5").read_bytes() == b"new"
+
+
+def test_download_can_bypass_the_missing_file_memory(sftp_server, tmp_path, home):
+    with pytest.raises(_sftp.NotOnServer):
+        download(home / "x.h5")
+    path = tmp_path / "server" / Path(*REMOTE.parts)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"new")
+    _sftp.download(_config.settings(), REMOTE, home / "x.h5", use_cache=False)
+    assert (home / "x.h5").read_bytes() == b"new"
+
+
+def test_stat_of_a_denied_file(served):
+    served.denied.add(str(REMOTE))
+    with pytest.raises(TransferError, match="is denied"):
+        _sftp.stat(_config.settings(), REMOTE)
+
+
+def test_listdir_returns_sizes_and_mtimes(served):
+    listing = _sftp.listdir(_config.settings(), REMOTE.parent)
+    assert listing == {"x.h5": (len(b"private data"), TIMESTAMP)}
+    assert served.listings[str(REMOTE.parent)] == 1
+
+
+def test_listdir_of_a_missing_directory(sftp_server, sleeps):
+    with pytest.raises(_sftp.NotOnServer):
+        _sftp.listdir(_config.settings(), REMOTE.parent)
+    assert sleeps == []
+
+
+def test_listdir_of_a_denied_directory(served):
+    served.denied.add(str(REMOTE.parent))
+    with pytest.raises(TransferError, match="is denied"):
+        _sftp.listdir(_config.settings(), REMOTE.parent)
+
+
+def test_listdir_leaves_out_directories(served, tmp_path):
+    (tmp_path / "server" / Path(*REMOTE.parent.parts) / "sub").mkdir()
+    assert set(_sftp.listdir(_config.settings(), REMOTE.parent)) == {"x.h5"}
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need privileges on Windows")
+def test_listdir_describes_a_link_by_its_target(served, tmp_path):
+    directory = tmp_path / "server" / Path(*REMOTE.parent.parts)
+    os.symlink(directory / "x.h5", directory / "link.h5")
+    os.symlink(directory / "gone.h5", directory / "broken.h5")
+    listing = _sftp.listdir(_config.settings(), REMOTE.parent)
+    assert listing["link.h5"] == listing["x.h5"] == (len(b"private data"), TIMESTAMP)
+    assert "broken.h5" not in listing

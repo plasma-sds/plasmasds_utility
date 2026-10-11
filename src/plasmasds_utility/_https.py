@@ -18,11 +18,21 @@ from plasmasds_utility.exceptions import TransferError
 _CHUNK = 1024 * 1024
 
 
-def _server_time(last_modified, url):
-    """Return the Last-Modified header as a POSIX timestamp, or None with a warning."""
+class NotOnServer(TransferError):
+    """The file is not on the public server (HTTP 404; not retried)."""
+
+
+def _server_time(last_modified, url, *, download=True):
+    """Return the Last-Modified header as a POSIX timestamp, or None.
+
+    For a download, a missing or unusable header also logs a warning; a check
+    (HEAD) reports it to its caller instead.
+    """
     try:
         return email.utils.parsedate_to_datetime(last_modified).timestamp()
     except (TypeError, ValueError):
+        if not download:
+            return None
         logger.warning(
             "%s sent no usable Last-Modified header (%r); the local copy keeps the "
             "download time, so the update check cannot compare it with the server",
@@ -103,31 +113,42 @@ def download(url, target, *, timeout=30, attempts=3, backoff=1.0):
     TransferError
         If the download fails; the message names the URL and the reason.
     """
-    if attempts < 1:
+    if attempts < 1:  # before any I/O
         raise ValueError(f"attempts must be at least 1, got {attempts}")
     _files.make_parent(target)
+    _run(url, lambda: _fetch_once(url, target, timeout), "download", attempts, backoff)
+    logger.info("downloaded %s to %s", url, target)
+    return target
+
+
+def _run(url, action, verb, attempts, backoff):
+    """Call action() with bounded retries and backoff; return its result.
+
+    HTTP 404 and other 4xx are not retried; 5xx, connection errors, timeouts and
+    truncated transfers are. ``verb`` names the operation in messages.
+    """
+    if attempts < 1:
+        raise ValueError(f"attempts must be at least 1, got {attempts}")
     if not url.startswith("https://"):
-        logger.warning("downloading over an unencrypted connection: %s", url)
+        logger.warning("using an unencrypted connection for %s", url)
     for attempt in range(1, attempts + 1):
         try:
-            _fetch_once(url, target, timeout)
+            return action()
         except urllib.error.HTTPError as error:
             if error.code == 404:
-                raise TransferError(
+                raise NotOnServer(
                     f"{url} is not on the public server (HTTP 404)"
                 ) from error
             if error.code < 500:
                 raise TransferError(
-                    f"cannot download {url}: HTTP {error.code} {error.reason}"
+                    f"cannot {verb} {url}: HTTP {error.code} {error.reason}"
                 ) from error
             last_error = error
         except (OSError, http.client.HTTPException) as error:
             last_error = error
-        else:
-            logger.info("downloaded %s to %s", url, target)
-            return target
         logger.warning(
-            "download of %s failed (attempt %d of %d): %s",
+            "%s of %s failed (attempt %d of %d): %s",
+            verb,
             url,
             attempt,
             attempts,
@@ -136,5 +157,43 @@ def download(url, target, *, timeout=30, attempts=3, backoff=1.0):
         if attempt < attempts:
             time.sleep(backoff * 2 ** (attempt - 1))
     raise TransferError(
-        f"cannot download {url} after {attempts} attempts: {last_error}"
+        f"cannot {verb} {url} after {attempts} attempts: {last_error}"
     ) from last_error
+
+
+def head(url, *, timeout=30, attempts=3, backoff=1.0):
+    """Return the size and modification time of a public file, without its content.
+
+    Sends an HTTP HEAD request and reads ``Content-Length`` and ``Last-Modified``;
+    the update check compares them with the local copy.
+
+    Parameters
+    ----------
+    url : str
+        The URL of the file.
+    timeout, attempts, backoff
+        As for :func:`download`.
+
+    Returns
+    -------
+    tuple
+        ``(size, mtime)``: the size in bytes and the POSIX modification time, each
+        None if the server does not send it.
+
+    Raises
+    ------
+    TransferError
+        If the file is not on the public server (HTTP 404), or the request still
+        fails after the last attempt.
+    ValueError
+        If ``attempts`` is less than 1.
+    """
+
+    def ask():
+        request = urllib.request.Request(url, method="HEAD")
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            headers = response.headers
+        size = _content_length(headers, url)
+        return size, _server_time(headers.get("Last-Modified"), url, download=False)
+
+    return _run(url, ask, "check", attempts, backoff)

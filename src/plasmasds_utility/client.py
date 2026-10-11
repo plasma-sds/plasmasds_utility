@@ -6,7 +6,12 @@ import sys
 from pathlib import Path
 
 from plasmasds_utility import _config, _https, _paths, _sftp
-from plasmasds_utility.exceptions import AuthError, PathError, TransferError
+from plasmasds_utility.exceptions import (
+    AuthError,
+    ConfigError,
+    PathError,
+    TransferError,
+)
 
 _PREFIX = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 # On Windows these files share a directory with the client directories.
@@ -77,6 +82,122 @@ def _summary_at_exit():
         print(f"plasmasds_utility: {_fallback_summary()}", file=sys.stderr)
 
 
+_noticed = False  # whether the unchecked-local-data notice was given
+
+
+_UPDATE_CHOICES = ("never", "if_newer", "force")
+
+
+def _explain_update():
+    """Print once per process what get() does with local copies, and the options.
+
+    A notice, not a warning: it is printed to stderr like the exit summary and
+    logged at INFO, so that warnings keep meaning that something went wrong.
+    """
+    global _noticed
+    if _noticed:
+        return
+    _noticed = True
+    text = (
+        "get() uses a local copy without asking the server for a newer version "
+        '(update="never", the default), and downloads a file that is not on disk. '
+        'Other options: update="if_newer" downloads again if the server copy is '
+        'newer; update="force" downloads again regardless. '
+        "DataClient(prefix).check_updates() checks every local file of a client."
+    )
+    _config.logger.info(text)
+    print(f"plasmasds_utility: {text}", file=sys.stderr)
+
+
+# Seconds by which the server time must exceed the local time to count as newer:
+# FAT and exFAT store times in 2-second steps, which would otherwise make some
+# files look newer on every check.
+_TOLERANCE = 2
+
+
+def _newer(path, size, mtime):
+    """Return whether the server copy (size, mtime) is newer than the local file.
+
+    Newer means a modification time more than ``_TOLERANCE`` seconds later. A local
+    copy that is newer than the server's is kept (edited locally, or the server
+    copy was restored with an older time) and logged at INFO; one with the same
+    time but a different size is kept with a warning.
+
+    Raises
+    ------
+    PathError
+        If the local file cannot be read.
+    TransferError
+        If the server sent no modification time, so the copies cannot be compared.
+    """
+    try:
+        local = path.stat()
+    except OSError as error:  # removed or replaced while being checked
+        raise PathError(f"cannot read {path}: {error}") from error
+    if mtime is None:
+        raise TransferError(
+            f"cannot compare {path} with the server copy: the server sent no "
+            "modification time"
+        )
+    if int(mtime) - int(local.st_mtime) > _TOLERANCE:
+        return True
+    if int(local.st_mtime) - int(mtime) > _TOLERANCE:
+        _config.logger.info(
+            "kept %s, which is newer than the server copy (edited locally? if the "
+            'server copy was restored, use update="force")',
+            path,
+        )
+    elif size is not None and size != local.st_size:
+        _config.logger.warning(
+            "%s has the same modification time as the server copy but a different "
+            "size (local copy: %d bytes, server copy: %d bytes): it was edited "
+            "locally, or changed on the server without a new modification time; "
+            'to replace it with the server copy, use get(key, update="force")',
+            path,
+            local.st_size,
+            size,
+        )
+    return False
+
+
+def _refresh_private(settings, remote, path, force):
+    """Download the private copy if the server copy is newer, or always if forced.
+
+    Returns whether the file was downloaded.
+    """
+    if not force:
+        size, mtime = _sftp.stat(settings, remote, use_cache=False)
+        if not _newer(path, size, mtime):
+            return False
+    _sftp.download(settings, remote, path, use_cache=False)
+    return True
+
+
+def _refresh_public(url, path, force):
+    """Download the public copy if the server copy is newer, or always if forced.
+
+    Returns whether the file was downloaded.
+    """
+    if not force:
+        size, mtime = _https.head(url)
+        if not _newer(path, size, mtime):
+            return False
+    _https.download(url, path)
+    return True
+
+
+def _kept(path, error, force):
+    """Return the error for a requested check or download that could not be done.
+
+    An AuthError stays an AuthError, so callers catching it still do.
+    """
+    cls = AuthError if isinstance(error, AuthError) else TransferError
+    if isinstance(error, (_sftp.NotOnServer, _https.NotOnServer)):
+        return cls(f"kept the local copy {path}: {error}")
+    failed = "could not be downloaded again" if force else "could not be checked"
+    return cls(f"kept the local copy {path}, but the server copy {failed}: {error}")
+
+
 def _present(path, key):
     """Return whether path is a file; raise PathError if something else is there."""
     if path.is_file():
@@ -84,6 +205,29 @@ def _present(path, key):
     if path.exists():
         raise PathError(f"cannot store {key!r} at {path}: it is not a file")
     return False
+
+
+def _local_files(tree):
+    """Return (path, key) for the data files below tree, sorted.
+
+    Temporary files, anything hidden (including inside hidden directories) and
+    names that are not valid keys (with a warning) are left out.
+    """
+    if not tree.is_dir():
+        return []
+    files = []
+    for path in sorted(p for p in tree.rglob("*") if p.is_file()):
+        parts = path.relative_to(tree).parts
+        if any(part.startswith(".") for part in parts) or path.name.endswith(".part"):
+            continue
+        key = "/".join(parts)
+        try:
+            _paths.check_key(key)
+        except PathError as error:
+            _config.logger.warning("skipping %s: %s", path, error)
+            continue
+        files.append((path, key))
+    return files
 
 
 class DataClient:
@@ -209,8 +353,13 @@ class DataClient:
         _paths.check_key(key)  # before any I/O
         return _paths.local_path(self.client_dir(), key, private=private)
 
-    def get(self, key, *, private=None):
-        """Return the local path of a data file, downloading it if it is missing.
+    def get(self, key, *, private=None, update="never"):
+        """Return the local path of a data file, downloading it first if needed.
+
+        ``get`` does not open the file: it returns a :class:`pathlib.Path` for the
+        client to open with its usual tools (``h5py``, ``numpy``, ...). Clients
+        call it every time they need a file; when the file is already on disk,
+        that costs a single ``stat``.
 
         Looks in this order and returns the first file found:
 
@@ -229,11 +378,24 @@ class DataClient:
         a process with a warning, every one in the log file, and all of them in a
         summary at exit and in :func:`show_public_fallbacks`.
 
-        A local private copy is returned after a single ``stat``, without
-        contacting a server. With the default, a local public copy is returned only
-        after the private server has been asked once per file and process, because
-        private data comes first; use ``private=False`` to skip that, for example
-        offline.
+        ``update`` decides what happens to a file that is already on disk; a file
+        that is not on disk is always downloaded:
+
+        - ``"never"`` (default): the local copy is used without asking the server;
+        - ``"if_newer"``: the local copy is compared with its server and
+          downloaded again only if the server copy is newer (modification time);
+          a newer local copy is kept, and one with the same time but a different
+          size is kept with a warning;
+        - ``"force"``: the local copy is downloaded again regardless, for example
+          when it is damaged.
+
+        The first call in a process prints these options. If a requested check
+        cannot be done, the local copy is kept and :class:`TransferError` is
+        raised. Without a local copy, the private
+        server is asked even about a file it was found not to have earlier in
+        the process (with the default, that answer is remembered, so a local
+        public copy normally costs one question per file and process; use
+        ``private=False`` to skip it, for example offline).
 
         Parameters
         ----------
@@ -242,6 +404,8 @@ class DataClient:
         private : bool or None, default None
             True for private data only, False for public data only (the private
             server is never contacted), None for the best available.
+        update : {"never", "if_newer", "force"}, default "never"
+            What to do with a local copy (see above).
 
         Returns
         -------
@@ -250,33 +414,61 @@ class DataClient:
 
         Raises
         ------
+        ValueError
+            If ``update`` is not one of the values above.
         PathError
-            If the key is invalid, or something other than a file is in the way.
+            If the key is invalid, something other than a file is in the way, or
+            the file cannot be written.
         AuthError
             With ``private=True``, if private data is not available to you.
         TransferError
-            If the private server fails, other than by the fallbacks above, or the
-            file is not on the servers that were tried.
+            If the private server fails, other than by the fallbacks above, the
+            file is not on the servers that were tried, or a requested check of a
+            local copy cannot be done.
         ConfigError
             As for :meth:`client_dir`, or if the configured SSH key is missing or
             unreadable.
         """
+        if update not in _UPDATE_CHOICES:
+            raise ValueError(
+                f"update must be one of {', '.join(map(repr, _UPDATE_CHOICES))}, "
+                f"got {update!r}"
+            )
+        _paths.check_key(key)  # an invalid call prints nothing
+        _config.start_logging()  # so that the explanation reaches the log file
+        _explain_update()
         settings = _config.settings()
+        refresh = update != "never"
+        force = update == "force"
         reason = None
         if private is not False:
             private_path = self.local_path(key, private=True)
-            if _present(private_path, key):
-                return private_path
             remote = _paths.private_remote(settings, self.prefix, key)
+            if _present(private_path, key):
+                if not refresh:
+                    return private_path
+                try:
+                    _refresh_private(settings, remote, private_path, force)
+                except TransferError as error:
+                    raise _kept(private_path, error, force) from error
+                return private_path
             try:
-                return _sftp.download(settings, remote, private_path)
+                return _sftp.download(
+                    settings, remote, private_path, use_cache=not refresh
+                )
             except (AuthError, _sftp.NotOnServer) as error:
                 if private:
                     raise
                 reason = error
         public_path = self.local_path(key, private=False)
-        if not _present(public_path, key):
-            url = _paths.public_url(settings, self.prefix, key)
+        url = _paths.public_url(settings, self.prefix, key)
+        if _present(public_path, key):
+            if refresh:
+                try:
+                    _refresh_public(url, public_path, force)
+                except TransferError as error:
+                    raise _kept(public_path, error, force) from error
+        else:
             try:
                 _https.download(url, public_path)
             except TransferError as error:
@@ -289,6 +481,131 @@ class DataClient:
         if reason is not None:
             _record_fallback(self.prefix, key, reason, public_path)
         return public_path
+
+    def check_updates(self):
+        """Check every local data file against its server and download newer ones.
+
+        Walks the local ``public/`` and ``private/`` trees of this client and
+        compares each file with its server, as ``get(key, update="if_newer")``
+        does, downloading it again where the server copy is newer. Temporary and
+        hidden files are skipped, including anything inside a hidden directory,
+        and so is a file whose name is not a valid key (with a warning).
+
+        Private files are checked with one SFTP listing per directory; public
+        files with one HTTPS ``HEAD`` request each, so a public tree of many
+        thousands of files takes a while.
+        Unlike a single ``get``, a file missing on its server is kept with a
+        warning, and the other files are still checked. If private data is not
+        available to you (no usable SSH key), the ``private/`` tree is not checked
+        further. At the
+        end a short report is printed to stderr, followed by the public-fallback
+        summary if there were fallbacks in this process.
+
+        Returns
+        -------
+        list of pathlib.Path
+            The files that were downloaded again.
+
+        Raises
+        ------
+        TransferError
+            After the whole check, if anything could not be checked; the message
+            lists it. Files that could be checked are already updated: the
+            exception's ``updated`` and ``missing`` attributes list the files that
+            were downloaded again and those missing on their server.
+        ConfigError
+            As for :meth:`client_dir`. A configured SSH key that is missing or
+            unreadable does not raise here: the private data is reported as not
+            checked, like a missing key.
+        """
+        settings = _config.settings()
+        base = self.client_dir()
+        updated, missing, failed = [], [], []
+        public = _local_files(base / "public")
+        private = _local_files(base / "private")
+        keys = {key for _, key in public} | {key for _, key in private}
+        for path, key in public:
+            url = _paths.public_url(settings, self.prefix, key)
+            try:
+                if _refresh_public(url, path, False):
+                    updated.append(path)
+                    _config.logger.info("updated %s", path)
+            except _https.NotOnServer as error:
+                missing.append(path)
+                _config.logger.warning("kept %s: %s", path, error)
+            except (TransferError, PathError) as error:
+                failed.append((key, error))
+                _config.logger.warning("cannot check %s: %s", path, error)
+        unchecked = 0
+        try:
+            self._check_private(settings, private, updated, missing, failed)
+        except (AuthError, ConfigError) as error:
+            done = {p for p in updated + missing} | {k for k, _ in failed}
+            unchecked = sum(
+                1 for path, key in private if path not in done and key not in done
+            )
+            failed.append(("private data (not checked)", error))
+            _config.logger.warning(
+                "the private data of %s was not checked: %s", self.prefix, error
+            )
+        not_checked = unchecked + sum(1 for what, _ in failed if what in keys)
+        print(
+            f"plasmasds_utility: {len(public) + len(private)} local file(s) of "
+            f"{self.prefix}: {len(updated)} updated, {len(missing)} not on the "
+            f"server, {not_checked} could not be checked",
+            file=sys.stderr,
+        )
+        if _fallbacks:
+            print(f"plasmasds_utility: {_fallback_summary()}", file=sys.stderr)
+        if failed:
+            lines = "\n".join(f"  {what}: {error}" for what, error in failed)
+            error = TransferError(
+                f"could not check everything of {self.prefix}:\n{lines}"
+            )
+            error.updated = updated
+            error.missing = missing
+            raise error
+        return updated
+
+    def _check_private(self, settings, files, updated, missing, failed):
+        """Check local private files, listing each server directory once.
+
+        Appends to ``updated``, ``missing`` and ``failed``; an AuthError stops the
+        check and is raised.
+        """
+        by_dir = {}
+        for path, key in files:
+            remote = _paths.private_remote(settings, self.prefix, key)
+            by_dir.setdefault(remote.parent, []).append((path, key, remote))
+        for remote_dir, entries in by_dir.items():
+            try:
+                listing = _sftp.listdir(settings, remote_dir)
+            except _sftp.NotOnServer:
+                listing = {}
+            except AuthError:
+                raise
+            except TransferError as error:
+                for _path, key, _remote in entries:
+                    failed.append((key, error))
+                _config.logger.warning("cannot list %s: %s", remote_dir, error)
+                continue
+            for path, key, remote in entries:
+                if remote.name not in listing:
+                    missing.append(path)
+                    _config.logger.warning(
+                        "kept %s: %s is not on the private server", path, remote
+                    )
+                    continue
+                try:
+                    if _newer(path, *listing[remote.name]):
+                        _sftp.download(settings, remote, path, use_cache=False)
+                        updated.append(path)
+                        _config.logger.info("updated %s", path)
+                except AuthError:
+                    raise
+                except (TransferError, PathError) as error:
+                    failed.append((key, error))
+                    _config.logger.warning("cannot check %s: %s", path, error)
 
     def set_working_dir(self, path):
         """Save the working directory for this client in the user configuration.

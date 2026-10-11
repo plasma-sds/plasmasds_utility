@@ -1,3 +1,4 @@
+import email.utils
 import itertools
 import json
 import logging
@@ -18,6 +19,7 @@ from plasmasds_utility import (
     PathError,
     TransferError,
     _config,
+    _https,
     _sftp,
 )
 
@@ -418,13 +420,18 @@ class Servers:
         self.http = http
         self.root = root
 
-    def put_private(self, key, body=b"private"):
+    def put_private(self, key, body=b"private", mtime=None):
         path = self.root.joinpath("private_html", "renate-od", *key.split("/"))
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(body)
+        if mtime is not None:
+            os.utime(path, (mtime, mtime))
 
-    def put_public(self, key, body=b"public"):
-        self.http.serve(f"/~data/renate-od/{key}", {"body": body})
+    def put_public(self, key, body=b"public", mtime=None):
+        answer = {"body": body}
+        if mtime is not None:
+            answer["last_modified"] = email.utils.formatdate(mtime, usegmt=True)
+        self.http.serve(f"/~data/renate-od/{key}", answer)
 
     def public_requests(self):
         return sum(self.http.requests.values())
@@ -675,3 +682,441 @@ def test_get_refuses_a_directory_in_the_private_copy(servers):
     with pytest.raises(PathError, match="it is not a file"):
         client.get("a.h5")
     assert servers.sftp.connections == 0
+
+
+OLD, NEW = 1_500_000_000, 1_600_000_000  # two server/local modification times
+
+
+@pytest.fixture
+def stat_calls(monkeypatch):
+    """Record the update-check stat calls made through _sftp.stat."""
+    calls = []
+    original = _sftp.stat
+
+    def spy(settings, remote, **kwargs):
+        calls.append(str(remote))
+        return original(settings, remote, **kwargs)
+
+    monkeypatch.setattr(_sftp, "stat", spy)
+    return calls
+
+
+def place_at(path, body, mtime):
+    place(path, body)
+    os.utime(path, (mtime, mtime))
+
+
+def notices(capsys):
+    """Return the update-option explanations printed to stderr so far."""
+    err = capsys.readouterr().err
+    return [line for line in err.splitlines() if "get() uses a local copy" in line]
+
+
+def test_first_get_explains_the_update_options_once(servers, capsys, caplog):
+    servers.put_private("a.h5")
+    servers.put_private("b.h5", b"mine", mtime=OLD)
+    client = DataClient("renate-od")
+    place_at(client.local_path("b.h5"), b"mine", OLD)
+    with caplog.at_level(logging.INFO, logger="plasmasds_utility"):
+        client.get("a.h5")  # downloaded
+        client.get("b.h5")  # local copy
+        client.get("b.h5", update="if_newer")
+    (notice,) = notices(capsys)
+    assert notice.startswith("plasmasds_utility: get() uses a local copy")
+    for text in (
+        'update="never", the default',
+        "downloads a file that is not on disk",
+        'update="if_newer" downloads again if the server copy is newer',
+        'update="force" downloads again regardless',
+        "check_updates()",
+    ):
+        assert text in notice
+    # A notice, not a warning: logged at INFO only.
+    levels = {r.levelno for r in caplog.records if "get() uses" in r.getMessage()}
+    assert levels == {logging.INFO}
+
+
+def test_explanation_reaches_the_log_file_when_get_comes_first(home):
+    # Place the file without any call that would start logging first.
+    path = _config.default_data_dir() / "renate-od" / "private" / "a.h5"
+    place(path, b"mine")
+    assert DataClient("renate-od").get("a.h5") == path
+    text = (_config.log_dir() / _config.LOG_FILE).read_text("utf-8")
+    assert "INFO plasmasds_utility: get() uses a local copy" in text
+
+
+def test_invalid_key_prints_no_explanation(home, capsys):
+    with pytest.raises(PathError):
+        DataClient("renate-od").get("../a.h5")
+    assert notices(capsys) == []
+
+
+def test_local_copy_is_used_without_contacting_the_server(servers):
+    client = DataClient("renate-od")
+    place(client.local_path("a.h5"), b"mine")
+    assert client.get("a.h5").read_bytes() == b"mine"
+    assert servers.sftp.connections == 0
+
+
+@pytest.mark.parametrize(
+    ("server", "local", "downloaded"),
+    [
+        ((b"new!", NEW), (b"old!", OLD), True),  # server newer
+        ((b"longer", NEW), (b"old!", OLD), True),  # server newer, size differs
+        ((b"same", OLD), (b"same", OLD), False),  # unchanged
+        ((b"longer", OLD), (b"old!", NEW), False),  # server older, size differs
+        ((b"longer", OLD), (b"old!", OLD), False),  # same time, size differs
+        ((b"same", OLD), (b"mine", NEW), False),  # server older, same size
+    ],
+)
+def test_if_newer_on_a_private_copy(servers, stat_calls, server, local, downloaded):
+    servers.put_private("a.h5", server[0], mtime=server[1])
+    client = DataClient("renate-od")
+    path = client.local_path("a.h5")
+    place_at(path, *local)
+    assert client.get("a.h5", update="if_newer") == path
+    assert path.read_bytes() == (server[0] if downloaded else local[0])
+    assert len(stat_calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("server", "local", "downloaded"),
+    [
+        ((b"new!", NEW), (b"old!", OLD), True),
+        ((b"same", OLD), (b"same", OLD), False),
+        ((b"longer", OLD), (b"old!", NEW), False),
+        ((b"longer", OLD), (b"old!", OLD), False),
+    ],
+)
+def test_if_newer_on_a_public_copy(servers, server, local, downloaded):
+    servers.put_public("a.h5", server[0], mtime=server[1])
+    client = DataClient("renate-od")
+    path = client.local_path("a.h5", private=False)
+    place_at(path, *local)
+    client.get("a.h5", private=False, update="if_newer")
+    assert path.read_bytes() == (server[0] if downloaded else local[0])
+    assert servers.http.requests["HEAD /~data/renate-od/a.h5"] == 1
+    assert servers.http.requests["/~data/renate-od/a.h5"] == (1 if downloaded else 0)
+
+
+@pytest.mark.parametrize(("ahead", "newer"), [(1, False), (2, False), (3, True)])
+def test_newer_allows_two_seconds_of_rounding(home, ahead, newer):
+    path = home / "a.h5"
+    place_at(path, b"same", OLD)
+    assert client_module._newer(path, 4, OLD + ahead) is newer
+
+
+def test_newer_local_copy_is_kept_and_logged(servers, caplog):
+    servers.put_private("a.h5", b"server", mtime=OLD)
+    client = DataClient("renate-od")
+    path = client.local_path("a.h5")
+    place_at(path, b"edited", NEW)  # same size, edited locally
+    with caplog.at_level(logging.INFO, logger="plasmasds_utility"):
+        client.get("a.h5", update="if_newer")
+    assert path.read_bytes() == b"edited"
+    assert "which is newer than the server copy (edited locally?" in caplog.text
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_public_copy_without_last_modified_cannot_be_compared(servers):
+    servers.http.serve("/~data/renate-od/a.h5", {"body": b"same"})  # no header
+    client = DataClient("renate-od")
+    path = client.local_path("a.h5", private=False)
+    place_at(path, b"same", OLD)
+    with pytest.raises(TransferError, match="cannot compare .* no modification time"):
+        client.get("a.h5", private=False, update="if_newer")
+    assert path.read_bytes() == b"same"
+
+
+def test_size_difference_alone_warns_but_keeps_the_copy(servers, caplog):
+    servers.put_private("a.h5", b"longer", mtime=OLD)
+    client = DataClient("renate-od")
+    path = client.local_path("a.h5")
+    place_at(path, b"old!", OLD)
+    with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
+        client.get("a.h5", update="if_newer")
+    assert path.read_bytes() == b"old!"
+    assert "same modification time as the server copy" in caplog.text
+    assert "(local copy: 4 bytes, server copy: 6 bytes)" in caplog.text
+    assert "edited locally, or changed on the server" in caplog.text
+
+
+def test_edited_local_copy_gets_no_warning(servers, caplog):
+    servers.put_private("a.h5", b"server", mtime=OLD)
+    client = DataClient("renate-od")
+    path = client.local_path("a.h5")
+    place_at(path, b"edited and longer", NEW)  # newer and a different size
+    with caplog.at_level(logging.INFO, logger="plasmasds_utility"):
+        client.get("a.h5", update="if_newer")
+    assert path.read_bytes() == b"edited and longer"
+    assert "which is newer than the server copy" in caplog.text
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert 'update="force"' in caplog.text
+
+
+def test_force_downloads_a_private_copy_again(servers, stat_calls):
+    servers.put_private("a.h5", b"good", mtime=OLD)
+    client = DataClient("renate-od")
+    place_at(client.local_path("a.h5"), b"bad!", OLD)  # same size and time: damaged
+    assert client.get("a.h5", update="if_newer").read_bytes() == b"bad!"
+    stat_calls.clear()
+    path = client.get("a.h5", update="force")
+    assert path.read_bytes() == b"good"
+    assert stat_calls == []  # no comparison, just the download
+
+
+def test_force_downloads_a_public_copy_again(servers):
+    servers.put_public("a.h5", b"good", mtime=OLD)
+    client = DataClient("renate-od")
+    place_at(client.local_path("a.h5", private=False), b"bad!", OLD)
+    path = client.get("a.h5", private=False, update="force")
+    assert path.read_bytes() == b"good"
+    assert servers.http.requests["HEAD /~data/renate-od/a.h5"] == 0
+
+
+@pytest.mark.parametrize("update", ["always", "", None, True, "Never"])
+def test_invalid_update_is_an_error_before_any_io(home, capsys, update):
+    with pytest.raises(ValueError, match="update must be one of 'never', 'if_newer'"):
+        DataClient("renate-od").get("a.h5", update=update)
+    assert list(home.iterdir()) == []
+    assert notices(capsys) == []
+
+
+def test_failed_check_keeps_the_local_copy_and_raises(servers):
+    write_config(
+        host="127.0.0.1",
+        port=servers.sftp.port,
+        host_keys=_config.settings()["host_keys"],
+        public_url=servers.http.url("/~data"),
+    )  # no key
+    client = DataClient("renate-od")
+    path = client.local_path("a.h5")
+    place(path, b"mine")
+    with pytest.raises(AuthError, match="kept the local copy .* could not be checked"):
+        client.get("a.h5", update="if_newer")  # still an AuthError, as documented
+    assert path.read_bytes() == b"mine"
+    assert client.get("a.h5") == path  # still usable without the check
+
+
+def test_failed_forced_download_keeps_the_local_copy(servers, monkeypatch):
+    monkeypatch.setattr(_https, "time", types.SimpleNamespace(sleep=lambda s: None))
+    servers.http.serve("/~data/renate-od/a.h5", {"status": 500})
+    client = DataClient("renate-od")
+    path = client.local_path("a.h5", private=False)
+    place(path, b"mine")
+    with pytest.raises(TransferError, match="could not be downloaded again"):
+        client.get("a.h5", private=False, update="force")
+    assert path.read_bytes() == b"mine"
+
+
+def test_check_of_a_local_copy_missing_on_the_server_raises(servers):
+    client = DataClient("renate-od")
+    place(client.local_path("a.h5"), b"mine")
+    with pytest.raises(TransferError, match="not on the private server") as error:
+        client.get("a.h5", update="if_newer")
+    assert "could not be checked" not in str(error.value)  # it was checked
+    assert client.local_path("a.h5").read_bytes() == b"mine"
+
+
+def test_if_newer_finds_a_file_uploaded_during_the_session(servers):
+    servers.put_public("a.h5", b"dummy")
+    client = DataClient("renate-od")
+    assert client.get("a.h5").read_bytes() == b"dummy"  # not on the private server
+    servers.put_private("a.h5", b"real")
+    assert client.get("a.h5").read_bytes() == b"dummy"  # remembered as missing
+    assert client.get("a.h5", update="if_newer").read_bytes() == b"real"
+
+
+def test_check_updates_updates_newer_files_in_both_trees(servers, capsys):
+    servers.put_private("p/new.h5", b"new!", mtime=NEW)
+    servers.put_private("p/same.h5", b"same", mtime=OLD)
+    servers.put_private("p/older.h5", b"longer", mtime=OLD)
+    servers.put_public("q/new.h5", b"new!", mtime=NEW)
+    client = DataClient("renate-od")
+    place_at(client.local_path("p/new.h5"), b"old!", OLD)
+    place_at(client.local_path("p/same.h5"), b"same", OLD)
+    place_at(client.local_path("p/older.h5"), b"mine", NEW)
+    place_at(client.local_path("q/new.h5", private=False), b"old!", OLD)
+    updated = client.check_updates()
+    assert sorted(updated) == sorted(
+        [client.local_path("p/new.h5"), client.local_path("q/new.h5", private=False)]
+    )
+    assert client.local_path("p/new.h5").read_bytes() == b"new!"
+    assert client.local_path("p/same.h5").read_bytes() == b"same"
+    assert client.local_path("p/older.h5").read_bytes() == b"mine"  # not newer
+    out = capsys.readouterr().err
+    assert "4 local file(s) of renate-od: 2 updated, 0 not on the server" in out
+    assert "public server instead of the private one" not in out
+
+
+def test_check_updates_skips_temporary_and_hidden_files(servers, stat_calls):
+    client = DataClient("renate-od")
+    private = client.client_dir() / "private"
+    place(private / ".a.h5.abc.part", b"x")
+    place(private / ".hidden", b"x")
+    place(private / ".cache" / "x.h5", b"x")  # inside a hidden directory
+    assert client.check_updates() == []
+    assert stat_calls == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows cannot create such a file")
+def test_check_updates_skips_invalid_names(servers, caplog, stat_calls):
+    client = DataClient("renate-od")
+    place(client.client_dir() / "private" / "con.h5", b"x")
+    with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
+        assert client.check_updates() == []
+    assert "skipping" in caplog.text
+    assert stat_calls == []
+
+
+def test_check_updates_keeps_files_missing_on_the_server(servers, capsys, caplog):
+    client = DataClient("renate-od")
+    place(client.local_path("gone.h5"), b"mine")
+    with caplog.at_level(logging.WARNING, logger="plasmasds_utility"):
+        assert client.check_updates() == []
+    assert client.local_path("gone.h5").read_bytes() == b"mine"
+    assert "not on the private server" in caplog.text
+    assert "1 not on the server" in capsys.readouterr().err
+
+
+def test_check_updates_without_a_key_checks_public_and_raises(servers):
+    write_config(
+        host="127.0.0.1",
+        port=servers.sftp.port,
+        host_keys=_config.settings()["host_keys"],
+        public_url=servers.http.url("/~data"),
+    )
+    servers.put_public("q.h5", b"new!", mtime=NEW)
+    client = DataClient("renate-od")
+    place_at(client.local_path("q.h5", private=False), b"old!", OLD)
+    place(client.local_path("a.h5"), b"mine")
+    place(client.local_path("b.h5"), b"mine")
+    with pytest.raises(TransferError, match="could not check everything") as error:
+        client.check_updates()
+    assert "private data (not checked): " in str(error.value)
+    assert "no SSH key found" in str(error.value)
+    assert str(error.value).count("\n") == 1  # one entry, not one per file
+    assert error.value.updated == [client.local_path("q.h5", private=False)]
+    assert error.value.missing == []
+    assert client.local_path("q.h5", private=False).read_bytes() == b"new!"
+    assert servers.sftp.connections == 1  # the private tree stopped at once
+
+
+def test_check_updates_counts_unchecked_private_files(servers, capsys):
+    write_config(
+        host="127.0.0.1",
+        port=servers.sftp.port,
+        host_keys=_config.settings()["host_keys"],
+        public_url=servers.http.url("/~data"),
+    )
+    client = DataClient("renate-od")
+    place(client.local_path("a.h5"), b"mine")
+    place(client.local_path("b.h5"), b"mine")
+    with pytest.raises(TransferError):
+        client.check_updates()
+    assert "2 local file(s) of renate-od: 0 updated, 0 not on the server, 2 could " in (
+        capsys.readouterr().err
+    )
+
+
+def test_check_updates_with_a_deleted_key_file_keeps_its_results(servers, capsys):
+    servers.put_public("q.h5", b"new!", mtime=NEW)
+    client = DataClient("renate-od")
+    place_at(client.local_path("q.h5", private=False), b"old!", OLD)
+    place(client.local_path("a.h5"), b"mine")
+    settings = _config.settings()
+    write_config(
+        host="127.0.0.1",
+        port=servers.sftp.port,
+        host_keys=settings["host_keys"],
+        public_url=servers.http.url("/~data"),
+        ssh_key=str(servers.sftp.key_file.parent / "deleted_key"),
+    )
+    with pytest.raises(TransferError, match="private data \\(not checked\\)") as error:
+        client.check_updates()
+    assert "does not exist" in str(error.value)
+    assert error.value.updated == [client.local_path("q.h5", private=False)]
+    assert "1 updated" in capsys.readouterr().err
+
+
+def test_check_updates_continues_after_a_failing_file(servers, monkeypatch):
+    monkeypatch.setattr(_https, "time", types.SimpleNamespace(sleep=lambda s: None))
+    servers.http.serve("/~data/renate-od/bad.h5", {"status": 500})
+    servers.put_public("good.h5", b"new!", mtime=NEW)
+    client = DataClient("renate-od")
+    place_at(client.local_path("bad.h5", private=False), b"old!", OLD)
+    place_at(client.local_path("good.h5", private=False), b"old!", OLD)
+    with pytest.raises(TransferError, match=r"could not check(?s:.)*bad\.h5") as error:
+        client.check_updates()
+    assert error.value.updated == [client.local_path("good.h5", private=False)]
+    assert client.local_path("good.h5", private=False).read_bytes() == b"new!"
+
+
+def test_a_file_vanishing_during_a_check_is_a_path_error(home):
+    with pytest.raises(PathError, match="cannot read"):
+        client_module._newer(home / "gone.h5", 1, 1)
+
+
+def test_check_updates_with_nothing_local(servers, capsys):
+    assert DataClient("renate-od").check_updates() == []
+    assert "0 local file(s) of renate-od" in capsys.readouterr().err
+
+
+def test_check_updates_gives_no_notice(servers, capsys):
+    servers.put_private("a.h5", b"same", mtime=OLD)
+    client = DataClient("renate-od")
+    place_at(client.local_path("a.h5"), b"same", OLD)
+    client.check_updates()
+    assert notices(capsys) == []
+
+
+def test_check_updates_prints_the_fallback_summary_after_fallbacks(servers, capsys):
+    servers.put_public("a.h5", mtime=OLD)
+    client = DataClient("renate-od")
+    client.get("a.h5")  # a fallback to public data
+    capsys.readouterr()
+    client.check_updates()
+    assert "1 file(s) came from the public server" in capsys.readouterr().err
+
+
+def test_check_updates_lists_each_private_directory_once(servers, stat_calls):
+    client = DataClient("renate-od")
+    for name in ("a", "b", "c"):
+        servers.put_private(f"d/{name}.h5", b"same", mtime=OLD)
+        place_at(client.local_path(f"d/{name}.h5"), b"same", OLD)
+    servers.put_private("e/x.h5", b"new!", mtime=NEW)
+    place_at(client.local_path("e/x.h5"), b"old!", OLD)
+    assert client.check_updates() == [client.local_path("e/x.h5")]
+    assert servers.sftp.listings["private_html/renate-od/d"] == 1
+    assert servers.sftp.listings["private_html/renate-od/e"] == 1
+    assert stat_calls == []  # no stat per file
+
+
+def test_check_updates_with_a_private_directory_missing_on_the_server(servers, capsys):
+    client = DataClient("renate-od")
+    place(client.local_path("gone/a.h5"), b"mine")
+    place(client.local_path("gone/b.h5"), b"mine")
+    assert client.check_updates() == []
+    assert client.local_path("gone/a.h5").read_bytes() == b"mine"
+    assert "2 not on the server" in capsys.readouterr().err
+
+
+def test_check_updates_treats_a_server_directory_as_missing(servers, capsys):
+    servers.put_private("x/inner.h5", b"x")  # on the server, x is a directory
+    client = DataClient("renate-od")
+    place(client.local_path("x"), b"mine")  # locally, x is a file
+    assert client.check_updates() == []
+    assert client.local_path("x").read_bytes() == b"mine"
+    assert "1 not on the server" in capsys.readouterr().err
+
+
+def test_check_updates_after_a_failed_listing_checks_the_rest(servers):
+    client = DataClient("renate-od")
+    servers.put_private("bad/a.h5", b"same", mtime=OLD)
+    place_at(client.local_path("bad/a.h5"), b"same", OLD)
+    servers.sftp.denied.add("private_html/renate-od/bad")
+    servers.put_private("ok/b.h5", b"new!", mtime=NEW)
+    place_at(client.local_path("ok/b.h5"), b"old!", OLD)
+    with pytest.raises(TransferError, match=r"(?s)bad/a\.h5: .*is denied") as error:
+        client.check_updates()
+    assert error.value.updated == [client.local_path("ok/b.h5")]

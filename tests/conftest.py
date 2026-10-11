@@ -29,7 +29,9 @@ class FakeServer:
     last one repeats. A response is a dict with ``body`` (bytes), and optionally
     ``status`` (default 200), ``last_modified`` (header value), ``length`` (the
     Content-Length to claim, default the body length) and ``stall`` (seconds to
-    wait before answering). Unknown paths answer 404.
+    wait before answering). Unknown paths answer 404. HEAD requests get the same
+    headers without the body, do not consume an answer, and are counted under
+    ``"HEAD <path>"``.
     """
 
     def __init__(self, port):
@@ -50,25 +52,36 @@ class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.0"
 
     def do_GET(self):
+        self._answer(body=True)
+
+    def do_HEAD(self):
+        self._answer(body=False)
+
+    def _answer(self, body):
         fake = self.server.fake
-        fake.requests[self.path] += 1
+        key = self.path if body else f"HEAD {self.path}"
+        fake.requests[key] += 1
         responses = fake.routes.get(self.path)
         if not responses:
             self.send_error(404)
             return
-        response = responses.pop(0) if len(responses) > 1 else responses[0]
+        if body:
+            response = responses.pop(0) if len(responses) > 1 else responses[0]
+        else:
+            response = responses[0]  # HEAD does not consume a scripted answer
         time.sleep(response.get("stall", 0))
         status = response.get("status", 200)
         if status != 200:
             self.send_error(status)
             return
-        body = response["body"]
+        data = response["body"]
         self.send_response(200)
-        self.send_header("Content-Length", str(response.get("length", len(body))))
+        self.send_header("Content-Length", str(response.get("length", len(data))))
         if response.get("last_modified"):
             self.send_header("Last-Modified", response["last_modified"])
         self.end_headers()
-        self.wfile.write(body)
+        if body:
+            self.wfile.write(data)
 
     def log_message(self, format, *args):
         pass  # keep the test output clean
@@ -124,6 +137,7 @@ def home(tmp_path, monkeypatch):
         monkeypatch.delenv(variable, raising=False)
     monkeypatch.setattr(_config, "_settings", None)
     monkeypatch.setattr(client, "_fallbacks", {})
+    monkeypatch.setattr(client, "_noticed", False)
     # Never use a real SSH agent: unsetting SSH_AUTH_SOCK is not enough on Windows,
     # where paramiko asks Pageant or the OpenSSH agent pipe directly.
     monkeypatch.setattr(paramiko.client, "Agent", FakeAgent)

@@ -4,8 +4,8 @@ A shared utility package for the plasma-sds synthetic diagnostics (renate, neuro
 Its first job is data access: fetching the data files a package needs from the group's data server when they are not available locally, and uploading data to the server on request.
 
 > **Status:** early development, no release yet.
-> What works so far: choosing where each client's data is stored, where each data file goes, and downloading private and public data (below).
-> Checking the server for newer data and uploading come in the next steps.
+> What works so far: choosing where each client's data is stored, where each data file goes, downloading private and public data, and checking the server for newer data (below).
+> Uploading comes in the next step.
 
 ## Planned scope (first version)
 
@@ -20,13 +20,18 @@ The design and the decisions that amend it are in [issue #6](https://github.com/
 ## Getting data
 
 ```python
+import h5py
 from plasmasds_utility import DataClient
 
 data = DataClient("renate-od")
 path = data.get("atomic_data/Na/rates.h5")  # local path; downloaded if missing
+with h5py.File(path) as f:  # the client package opens the file itself
+    ...
 ```
 
-`get` returns the first of these it finds:
+`get` returns the local path of a data file, downloading it first if needed; it does not open the file.
+Client packages call it every time they need a file: when the file is already on disk, that costs a single `stat`.
+It returns the first of these it finds:
 
 1. the local private copy;
 2. the file on the private server, downloaded over SFTP (needs an SSH key);
@@ -53,6 +58,25 @@ To list them at any time, for example at the end of a notebook:
 ```python
 plasmasds_utility.show_public_fallbacks()
 ```
+
+### Newer data on the server
+
+By default, a local copy is used without asking the server whether it has a newer version; a file that is not on disk is always downloaded.
+The `update` argument changes what happens to a local copy, and the first `get()` in a session prints these options:
+
+```python
+data.get(key)  # update="never": use the local copy as it is
+data.get(key, update="if_newer")  # download again if the server copy is newer
+data.get(key, update="force")  # download again regardless, e.g. a damaged copy
+data.check_updates()  # check every local file of this client ("if_newer")
+```
+
+The check compares the modification time of the local file with the server's (SFTP for private data, an HTTPS `HEAD` request for public data, which must send `Last-Modified`) and downloads again only when the server copy is more than 2 seconds newer.
+A local copy that is newer than the server's is never overwritten by a check, so data you are testing locally is safe; a copy with the same modification time but a different size is kept with a warning.
+`check_updates()` covers both the private and the public copies, lists each private server directory once, and prints a short report to stderr; it returns the files it downloaded again, and a file missing on the server is kept with a warning.
+
+**For whoever manages the server:** when an older version of a file is restored or re-published (for example with `rsync -a`, `cp -p` or `tar`, which keep the old modification time), give it a fresh modification time with `touch`.
+Otherwise users' checks see their copy as newer and keep it.
 
 ### Private data
 
