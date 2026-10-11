@@ -261,8 +261,9 @@ def test_server_without_hard_links_is_reported(existing, source, sleeps):
 def test_failed_hard_link_says_where(existing, source, sleeps):
     stub, local = existing
     stub.refused["hardlink"] = paramiko.SFTP_FAILURE
-    with pytest.raises(TransferError, match=f"archiving the old .* as {ARCHIVE}"):
+    with pytest.raises(TransferError, match=f"archiving the old .* as {ARCHIVE}") as e:
         upload(source, archive_to=ARCHIVE)
+    assert "may now be on the server" not in str(e.value)
     assert local(REMOTE).read_bytes() == b"old data"
     assert leftovers(existing) == []
 
@@ -343,8 +344,9 @@ def test_hard_link_made_but_its_answer_lost_is_kept(existing, source, monkeypatc
         raise TimeoutError("timed out")
 
     monkeypatch.setattr(_sftp, "_hardlink", link_then_time_out)
-    with pytest.raises(TransferError, match="server file is unchanged"):
+    with pytest.raises(TransferError, match="server file is unchanged") as error:
         upload(source, archive_to=ARCHIVE)
+    assert f"{ARCHIVE} may now be on the server" in str(error.value)
     assert local(REMOTE).read_bytes() == b"old data"
     assert local(ARCHIVE).read_bytes() == b"old data"  # a second name: harmless
     assert leftovers(existing) == []
@@ -440,3 +442,23 @@ def test_local_read_errors_are_path_errors():
 
     with pytest.raises(PathError, match="cannot read x.h5: .*Permission denied"):
         _sftp._Source(Failing(), "x.h5").read(10)
+
+
+def test_lost_connection_while_archiving_leaves_the_file_unchanged(
+    existing, source, sleeps
+):
+    stub, local = existing
+    stub.drop.add("hardlink")
+    with pytest.raises(TransferError, match="server file is unchanged") as error:
+        upload(source, archive_to=ARCHIVE)
+    assert "not known" not in str(error.value)
+    assert f"{ARCHIVE} may now be on the server" in str(error.value)
+    assert "left on the server: private_html/renate-od/a/.x.h5." in str(error.value)
+    assert local(REMOTE).read_bytes() == b"old data"
+
+
+def test_lost_connection_while_creating_says_so(server, source, sleeps):
+    stub, local = server
+    stub.drop.add("rename")
+    with pytest.raises(TransferError, match="not known whether .* was created"):
+        upload(source)

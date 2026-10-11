@@ -623,18 +623,35 @@ def upload(
                 cause = error
                 if not existed:
                     cause = f"{error}; did {remote} appear on the server meanwhile?"
-                elif not archived and not isinstance(error, _NoHardLinks):
-                    cause = f"{error}; did {archive_to} appear on the server meanwhile?"
-                if present is None:  # the connection failed: touch nothing
+                if renaming and present is None:  # the connection failed
                     stray = [temporary, archive_to] if archived else [temporary]
-                    outcome = f"it is not known whether {remote} was replaced"
+                    done = "replaced" if existed else "created"
+                    outcome = f"it is not known whether {remote} was {done}"
                 else:
-                    # The old file was not replaced, so it is still at remote and
-                    # a new archive name is a spare: only then is it removed.
+                    # Nothing was renamed: remote is as it was, and the temporary
+                    # file and an archive name made here are spares.
                     stray = [] if _remove(sftp, temporary) else [temporary]
                     if archived and not _remove(sftp, archive_to):
                         stray.append(archive_to)
-                    outcome = "the server file is unchanged"
+                    outcome = (
+                        "the server file is unchanged"
+                        if existed
+                        else f"{remote} was not created"
+                    )
+                    if (
+                        existed
+                        and not archived
+                        and not isinstance(error, _NoHardLinks)
+                        and _exists_or_unknown(sftp, archive_to) is not False
+                    ):
+                        # The link may have been made with its answer lost, or
+                        # someone else may have put a file there meanwhile.
+                        outcome += (
+                            f"; {archive_to} may now be on the server: if it has "
+                            f"the same content as {remote}, this upload made it as a "
+                            "second name of the old file, and it can be deleted "
+                            "before trying again"
+                        )
                 raise TransferError(
                     f"uploaded {source} to the temporary file {temporary}, but "
                     f"{step} {remote} failed ({cause}); {outcome}"
