@@ -34,3 +34,8 @@ data.get(key, private=False, update="if_newer")
 # as public data was asked for. When there are some, the list is also printed
 # when Python exits.
 plasmasds_utility.show_public_fallbacks()
+
+# Checks both ways to the server, public data over HTTPS and private data over
+# SFTP, and prints the settings in use: the first thing to run when something
+# does not work. Without an SSH key, the private check fails and says why.
+plasmasds_utility.check_connection()

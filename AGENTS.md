@@ -51,7 +51,7 @@ The environment is managed with [pixi](https://pixi.sh); its configuration lives
 - Tests marked `network` download from the public data server and run by default.
   Offline, use `pixi run test -m "not private and not network"`: a `-m` on the command line replaces the default selection, so `-m "not network"` alone would select the private tests.
   They include running `examples/get_data.py` and executing `examples/get_data.ipynb` (with `nbclient`, in the test environment only); the notebook is committed without outputs, which a test checks.
-  Nothing that runs in CI contacts the SFTP server: CI has no key, and examples use public data only (decided 2026-10-11 on #17).
+  Nothing that runs in CI contacts the SFTP server: CI has no key, the examples get public data only, and their tests point the examples' connection check at a closed local port for SFTP (decided 2026-10-11 on #17).
 - `pixi run lint`: ruff lint and format check; `pixi run ruff format .` applies the formatting.
 
 "A passing test run" in section 2 means `pixi run lint` and `pixi run test` both pass.
