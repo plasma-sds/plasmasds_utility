@@ -10,6 +10,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import nbclient
+import nbformat
 import pytest
 
 EXAMPLES = Path(__file__).parents[1] / "examples"
@@ -29,9 +31,13 @@ def test_script_runs(home):
 
 
 @pytest.mark.network
-def test_notebook_runs(home):
-    nbformat = pytest.importorskip("nbformat")
-    nbclient = pytest.importorskip("nbclient")
+def test_notebook_runs(home, monkeypatch):
+    # Only this environment's kernel: not a "python3" kernel the developer has
+    # installed for their user, pointing to another Python.
+    for variable in ("JUPYTER_PATH", "JUPYTER_CONFIG_DIR"):
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setenv("JUPYTER_DATA_DIR", str(home / "jupyter"))
+    monkeypatch.setenv("APPDATA", str(home / "AppData" / "Roaming"))
     notebook = nbformat.read(EXAMPLES / "get_data.ipynb", as_version=4)
     nbclient.NotebookClient(notebook, timeout=120, kernel_name="python3").execute()
     outputs = json.dumps([cell.get("outputs", []) for cell in notebook.cells])

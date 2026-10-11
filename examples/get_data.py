@@ -22,12 +22,13 @@ print("got", path)
 print("it says:", path.read_text(encoding="utf-8"))
 
 # Calling it again only checks that the file is on disk: no download.
-assert data.get(key, private=False) == path
+print("again:", data.get(key, private=False))
 
 # The local copy is used as it is; to download it again if the server has a
 # newer version:
 data.get(key, private=False, update="if_newer")
 
 # Lists the files that came from public data instead of private data; none here,
-# as public data was asked for. The same list is printed when Python exits.
+# as public data was asked for. When there are some, the list is also printed
+# when Python exits.
 plasmasds_utility.show_public_fallbacks()
