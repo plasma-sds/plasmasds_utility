@@ -116,6 +116,8 @@ data.upload(
 
 Each client package chooses its own archive layout.
 Nothing may be at `archive_to` yet; if there is no file to archive, the upload goes ahead with a warning.
+Replacing a file with one of the same size also gives a warning, in case it is the same file: uploading it again only makes every user download it again.
+The content is not compared, as new data often keeps the size of the old (HDF5 files, for example).
 The old file is not copied: it gets a second name on the server (a hard link), so archiving costs no space or time.
 Do not upload the same key from two places at once: the server has no locks, so one of two simultaneous replacements can be lost.
 

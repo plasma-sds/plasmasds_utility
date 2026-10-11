@@ -535,10 +535,10 @@ def upload(
             if _remove(sftp, path):
                 left.discard(path)
         try:
-            mode = sftp.stat(str(remote)).st_mode
-            existed = True
+            current = sftp.stat(str(remote))
+            mode, existed = current.st_mode, True
         except FileNotFoundError:
-            mode, existed = None, False
+            current, mode, existed = None, None, False
         if mode is not None and not stat_module.S_ISREG(mode):
             raise TransferError(
                 f"cannot upload {remote}: it is a folder (or another non-file) on "
@@ -582,8 +582,12 @@ def upload(
                 if _remove(sftp, temporary):
                     left.discard(temporary)
                 raise
+        # The size, if it equals the size of the file being replaced.
+        same_size = (
+            before.st_size if existed and current.st_size == before.st_size else None
+        )
         # The time of the upload: chmod and the rename do not change it.
-        return existed, attributes.st_mtime
+        return existed, same_size, attributes.st_mtime
 
     reported = False  # whether a failure message already accounts for the files
 
@@ -663,7 +667,7 @@ def upload(
                 ) from error
 
     try:
-        existed, mtime = _run(
+        existed, same_size, mtime = _run(
             settings,
             remote,
             _denied_is_final(prepare, remote),
@@ -673,6 +677,15 @@ def upload(
             backoff=backoff,
             use_cache=False,
         )
+        if same_size is not None:
+            # Often new data (HDF5 files keep their size), but maybe the same file
+            # again, which every user would then download again.
+            _config.logger.warning(
+                "replacing %s with a file of the same size (%d bytes); if it is "
+                "the same file, the upload only makes every user download it again",
+                remote,
+                same_size,
+            )
         if archive_to is not None and not existed:
             _config.logger.warning(
                 "uploading %s to %s: there is nothing to archive as %s",

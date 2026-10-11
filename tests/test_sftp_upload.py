@@ -462,3 +462,18 @@ def test_lost_connection_while_creating_says_so(server, source, sleeps):
     stub.drop.add("rename")
     with pytest.raises(TransferError, match="not known whether .* was created"):
         upload(source)
+
+
+def test_replacing_with_the_same_size_warns(existing, source, caplog):
+    stub, local = existing
+    source.write_bytes(b"NEW DATA")  # as long as the old data: 8 bytes
+    upload(source, archive_to=ARCHIVE)
+    assert local(REMOTE).read_bytes() == b"NEW DATA"
+    assert "same size (8 bytes)" in caplog.text
+
+
+def test_replacing_with_another_size_does_not_warn(existing, source, caplog):
+    stub, local = existing
+    source.write_bytes(b"newer, longer data")
+    upload(source, archive_to=ARCHIVE)
+    assert "same size" not in caplog.text

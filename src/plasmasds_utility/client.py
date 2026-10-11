@@ -620,10 +620,11 @@ class DataClient:
         The client package decides its archive layout, for example
         ``archive/<version>/<key>``; use a folder it reserves for archives. If
         nothing is at ``key`` yet, the file is uploaded with a warning that there
-        was nothing to archive. People reading the file from the server see the
-        complete old or the complete new file, never a partial one. Do not upload
-        the same key from two places at once: one of two simultaneous
-        replacements can be lost.
+        was nothing to archive. A replacement with the same size as the file it
+        replaces is uploaded with a warning, in case it is the same file. People
+        reading the file from the server see the complete old or the complete new
+        file, never a partial one. Do not upload the same key from two places at
+        once: one of two simultaneous replacements can be lost (#29).
 
         The uploaded file is readable by everyone on the server (mode 0644), which
         public data needs to be downloadable over HTTPS. Its modification time on
