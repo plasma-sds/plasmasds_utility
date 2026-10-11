@@ -350,20 +350,6 @@ def test_hard_link_made_but_its_answer_lost_is_kept(existing, source, monkeypatc
     assert leftovers(existing) == []
 
 
-def test_unreadable_upload_time_only_warns(server, source, monkeypatch, caplog):
-    stub, local = server
-    rename = paramiko.SFTPClient.rename
-
-    def rename_then_deny(sftp, old, new):
-        rename(sftp, old, new)
-        stub.denied.add(new)
-
-    monkeypatch.setattr(paramiko.SFTPClient, "rename", rename_then_deny)
-    assert upload(source) is None
-    assert local(REMOTE).read_bytes() == b"new data"
-    assert "cannot read its modification time" in caplog.text
-
-
 def test_interrupted_upload_names_what_may_be_left(
     existing, source, monkeypatch, caplog
 ):
@@ -427,3 +413,30 @@ def test_denied_archive_folder_is_refused_before_sending(existing, source, sleep
         upload(source, archive_to=ARCHIVE)
     assert stub.operations["write"] == 0
     assert stub.operations["mkdir"] == 1
+
+
+def test_source_changed_during_the_upload_is_refused(server, source, monkeypatch):
+    stub, local = server
+    putfo = paramiko.SFTPClient.putfo
+
+    def putfo_while_writing(sftp, *args, **kwargs):
+        result = putfo(sftp, *args, **kwargs)
+        with open(source, "ab") as file:
+            file.write(b" and more")
+        return result
+
+    monkeypatch.setattr(paramiko.SFTPClient, "putfo", putfo_while_writing)
+    with pytest.raises(PathError, match="changed during the upload"):
+        upload(source)
+    assert stub.operations["write"] == 1  # not retried
+    assert leftovers(server) == []
+    assert not local(REMOTE).exists()
+
+
+def test_local_read_errors_are_path_errors():
+    class Failing:
+        def read(self, size):
+            raise PermissionError(13, "Permission denied")
+
+    with pytest.raises(PathError, match="cannot read x.h5: .*Permission denied"):
+        _sftp._Source(Failing(), "x.h5").read(10)

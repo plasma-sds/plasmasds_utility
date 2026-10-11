@@ -26,6 +26,7 @@ One SFTP transfer runs at a time per process; parallel calls take turns.
 
 import atexit
 import errno
+import os
 import secrets
 import stat as stat_module
 import threading
@@ -509,7 +510,7 @@ def upload(
     -------
     int or None
         The modification time of the uploaded file on the server (the time of the
-        upload), or None if it could not be read (with a warning).
+        upload), or None if the server sent none.
 
     Raises
     ------
@@ -524,7 +525,7 @@ def upload(
     AuthError, ConfigError, ValueError
         As for :func:`download`.
     PathError
-        If the local file cannot be read.
+        If the local file cannot be read, or changes during the upload.
     """
     temporary = remote.parent / f".{remote.name}.{secrets.token_hex(4)}.part"
     left = set()  # temporary files that may still be on the server
@@ -563,13 +564,26 @@ def upload(
                 _make_dirs(sftp, archive_to.parent)
             left.add(temporary)
             try:
-                sftp.putfo(file, str(temporary), confirm=True)
+                before = os.fstat(file.fileno())
+                attributes = sftp.putfo(
+                    _Source(file, source), str(temporary), confirm=True
+                )
+                after = os.fstat(file.fileno())
+                if (before.st_size, before.st_mtime_ns) != (
+                    after.st_size,
+                    after.st_mtime_ns,
+                ):
+                    raise PathError(
+                        f"{source} changed during the upload; upload it again when "
+                        "it is complete"
+                    )
                 sftp.chmod(str(temporary), _MODE)
             except BaseException:
                 if _remove(sftp, temporary):
                     left.discard(temporary)
                 raise
-        return existed
+        # The time of the upload: chmod and the rename do not change it.
+        return existed, attributes.st_mtime
 
     reported = False  # whether a failure message already accounts for the files
 
@@ -630,19 +644,9 @@ def upload(
                         else ", and the temporary file was removed"
                     )
                 ) from error
-        try:
-            return sftp.stat(str(remote)).st_mtime
-        except _ERRORS as error:
-            _config.logger.warning(
-                "uploaded %s to %s, but cannot read its modification time: %s",
-                source,
-                remote,
-                error,
-            )
-            return None
 
     try:
-        existed = _run(
+        existed, mtime = _run(
             settings,
             remote,
             _denied_is_final(prepare, remote),
@@ -659,7 +663,7 @@ def upload(
                 remote,
                 archive_to,
             )
-        mtime = _run(
+        _run(
             settings,
             remote,
             finish,
@@ -749,6 +753,23 @@ def _make_dirs(sftp, directory):
     for path in reversed(missing):
         sftp.mkdir(str(path))
         sftp.chmod(str(path), _DIRECTORY_MODE)  # mkdir's mode is cut by the umask
+
+
+class _Source:
+    """The local file being uploaded; its read errors raise PathError.
+
+    So a local problem is not mistaken for a transfer error and retried.
+    """
+
+    def __init__(self, file, path):
+        self._file = file
+        self._path = path
+
+    def read(self, size=-1):
+        try:
+            return self._file.read(size)
+        except OSError as error:
+            raise PathError(f"cannot read {self._path}: {error}") from error
 
 
 class _NoHardLinks(OSError):
