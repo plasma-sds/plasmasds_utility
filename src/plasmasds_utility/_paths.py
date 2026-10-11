@@ -150,6 +150,34 @@ def private_remote(settings, prefix, key):
     return PurePosixPath(settings["private_root"], prefix, *parts)
 
 
+def public_remote(settings, prefix, key):
+    """Return the SFTP path of a public data file on the server, for uploads.
+
+    Parameters
+    ----------
+    settings : dict
+        The merged settings; ``public_root`` is used.
+    prefix : str
+        The client prefix.
+    key : str
+        The data key.
+
+    Returns
+    -------
+    pathlib.PurePosixPath
+        ``<public_root>/<prefix>/<key>``; relative to the SSH user's home unless
+        ``public_root`` is absolute. The web server serves the same file at
+        :func:`public_url`.
+
+    Raises
+    ------
+    PathError
+        If the key is invalid (see :func:`check_key`).
+    """
+    parts = check_key(key)
+    return PurePosixPath(settings["public_root"], prefix, *parts)
+
+
 def public_url(settings, prefix, key):
     """Return the HTTPS URL of a public data file.
 
