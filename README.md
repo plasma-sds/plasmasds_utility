@@ -4,8 +4,7 @@ A shared utility package for the plasma-sds synthetic diagnostics (renate, neuro
 Its first job is data access: fetching the data files a package needs from the group's data server when they are not available locally, and uploading data to the server on request.
 
 > **Status:** early development, no release yet.
-> What works so far: choosing where each client's data is stored, where each data file goes, downloading private and public data, and checking the server for newer data (below).
-> Uploading comes in the next step.
+> What works so far: choosing where each client's data is stored, where each data file goes, downloading private and public data, checking the server for newer data, and uploading (below).
 
 ## Planned scope (first version)
 
@@ -94,6 +93,42 @@ It never asks for a passphrase: load a key with a passphrase into the SSH agent 
 A failed login is remembered for the session, so after fixing it (for example with `ssh-add`), restart Python (or the Python kernel).
 The server's host key is checked against your `~/.ssh/known_hosts` first, and against the key shipped with the package if that file has no entry for the server; an unknown host is rejected.
 If the check fails although the server is genuine (for example after a reinstall), remove the server's line from `~/.ssh/known_hosts`.
+
+## Uploading data
+
+```python
+data.upload(key)  # the local private copy, to the private server
+data.upload(key, private=False)  # the local public copy, to the public server
+```
+
+`upload` sends the local copy of a key (see [Where files go](#where-files-go)) to the same key on the server.
+It uses SFTP for both trees, so it needs an SSH key (see [Private data](#private-data)) even for public data.
+
+An upload never loses data on the server: a file that is already there is replaced only when you name another key, in the same tree, to keep the old one under.
+For example, a release of renate keeps the previous reference results with the version that made them:
+
+```python
+data.upload(
+    "test_dataset/crm_systemtests/actual/case1.h5",
+    archive_to="test_dataset/crm_systemtests/archive/1.3.1/case1.h5",
+)
+```
+
+Each client package chooses its own archive layout.
+Nothing may be at `archive_to` yet; if there is no file to archive, the upload goes ahead with a warning.
+Replacing a file with one of the same size also gives a warning, in case it is the same file: uploading it again only makes every user download it again.
+The content is not compared, as new data often keeps the size of the old (HDF5 files, for example).
+The old file is not copied: it gets a second name on the server (a hard link), so archiving costs no space or time.
+Do not upload the same key from two places at once: the server has no locks, so one of two simultaneous replacements can be lost.
+
+The file is uploaded to a temporary name next to its target (`.<name>.<random>.part`) and renamed into place only when complete, so people downloading it get either the complete old or the complete new file.
+If a step fails, the message says which one, whether the file on the server is unchanged, and what may be left behind; a source file that changes during the upload is refused.
+Uploaded files are readable by everyone on the server (mode 0644, directories 0755), which public data needs to be served over HTTPS.
+The local copy is given the server's modification time, the time of the upload: `get(key, update="if_newer")` does not download your own upload again, while other users' copies are older and are updated by `update="if_newer"` or `check_updates()`.
+
+**For whoever manages the server:** the utility never deletes files on the server.
+A `.part` file left behind by a failed or interrupted upload (the message names it) can be deleted by hand; in the public tree it can also be downloaded until then.
+An archive name that a failed upload says may be left is a second name of the live file if both have the same content: delete it, never write over it in place, because writing over one name changes both.
 
 ## Where files go
 

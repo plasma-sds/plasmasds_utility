@@ -34,6 +34,10 @@ Decisions already made (do not re-open them without an owner):
   A file restored on the server with an older modification time must be given a fresh one (`touch`) to reach users.
   (Decided 2026-09-30, refined 2026-10-07 and 2026-10-08 on #15.)
 - Re-downloads triggered by a failed verification are bounded; they never loop.
+- Uploads never lose data on the server: a file there is replaced only when the caller names a key to keep the old one under (`archive_to`, a hard link on the server), and the client owns its archive layout.
+  There is no overwrite flag, and the utility never deletes files on the server.
+  Without server-side locks this holds for one upload of a key at a time; simultaneous uploads of the same key are documented as unsupported.
+  (Decided 2026-10-11 on #16.)
 - Failures are loud and specific: package-specific exception classes, messages that say where the failure happened, and a rotating log file.
 
 ### Commands
@@ -43,6 +47,7 @@ The environment is managed with [pixi](https://pixi.sh); its configuration lives
 - `pixi run test`: the test suite on the newest supported Python.
 - `pixi run -e py311 test`: the test suite on one Python version (`py311` to `py314`), as CI runs it.
 - `PLASMASDS_TEST_SSH_KEY=/path/to/key pixi run test -m private`: the tests that need SSH access to the private data server, with that key; they are deselected by default and skipped without the variable.
+  They upload files with unique names to `plasmasds_utility/test/` in both server trees and remove them afterwards; anything they cannot remove is reported, for an admin to delete.
 - Tests marked `network` download from the public data server and run by default.
   Offline, use `pixi run test -m "not private and not network"`: a `-m` on the command line replaces the default selection, so `-m "not network"` alone would select the private tests.
 - `pixi run lint`: ruff lint and format check; `pixi run ruff format .` applies the formatting.

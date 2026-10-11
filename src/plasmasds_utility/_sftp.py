@@ -1,4 +1,4 @@
-"""Download private files over SFTP, with paramiko.
+"""Download private files and upload files over SFTP, with paramiko.
 
 One SSH session per server (host, port and user) is opened on first use and reused
 for the rest of the process.
@@ -17,19 +17,33 @@ missing key, a key with a passphrase that is not in the agent) raise
 later calls fail at once instead of trying again; the messages say so. A file found
 missing on the server is remembered the same way, so asking again costs nothing.
 
+Uploads never replace a file on the server unless it is archived under another name
+first, and readers on the server always see either the complete old file or the
+complete new one.
+
 One SFTP transfer runs at a time per process; parallel calls take turns.
 """
 
 import atexit
+import errno
+import os
+import secrets
 import stat as stat_module
 import threading
 import time
 
 import paramiko
 from paramiko.hostkeys import HostKeyEntry, InvalidHostKey
+from paramiko.sftp import CMD_EXTENDED
 
 from plasmasds_utility import _config, _files
-from plasmasds_utility.exceptions import AuthError, ConfigError, TransferError
+from plasmasds_utility.exceptions import (
+    AuthError,
+    ConfigError,
+    PathError,
+    PlasmasdsUtilityError,
+    TransferError,
+)
 
 
 class NotOnServer(TransferError):
@@ -322,6 +336,13 @@ def _run(settings, remote, action, verb, *, timeout, attempts, backoff, use_cach
                     raise auth_error from error
                 _close(server)
                 last_error = error
+            except PlasmasdsUtilityError:
+                raise  # a refusal: the session is fine
+            except BaseException:
+                # Interrupted (Ctrl-C, say) in the middle of a request: the channel
+                # may be out of step, so the next call starts a new session.
+                _close(server)
+                raise
         _config.logger.warning(
             "%s of %s failed (attempt %d of %d): %s",
             verb,
@@ -333,8 +354,7 @@ def _run(settings, remote, action, verb, *, timeout, attempts, backoff, use_cach
         if attempt < attempts:
             time.sleep(backoff * 2 ** (attempt - 1))
     raise TransferError(
-        f"cannot {verb} {remote} from {server[0]} after {attempts} attempts: "
-        f"{last_error}"
+        f"cannot {verb} {remote} on {server[0]} after {attempts} attempts: {last_error}"
     ) from last_error
 
 
@@ -441,6 +461,377 @@ def stat(settings, remote, *, use_cache=True, timeout=30, attempts=3, backoff=1.
         backoff=backoff,
         use_cache=use_cache,
     )
+
+
+_MODE = 0o644  # uploaded files: readable by everyone, so the web server can serve them
+_DIRECTORY_MODE = 0o755
+_ERRORS = (paramiko.SSHException, OSError, EOFError)  # what a failed request raises
+
+
+def upload(
+    settings,
+    source,
+    remote,
+    *,
+    archive_to=None,
+    timeout=30,
+    attempts=3,
+    backoff=1.0,
+):
+    """Upload a local file to the server, never replacing a file unless archiving it.
+
+    The file is uploaded to a temporary name next to ``remote``
+    (``.<name>.<random>.part``), its size is confirmed and its mode set to 0644,
+    and only then is it renamed to ``remote``. Missing directories are created with
+    mode 0755.
+
+    Without ``archive_to``, an existing ``remote`` is refused, also one that appears
+    during the upload. With ``archive_to``, an existing ``remote`` is first given
+    that second name (a hard link, so the file itself is not touched), and the new
+    file then replaces ``remote`` in one atomic rename. If there was nothing to
+    archive, the file is uploaded with a warning.
+
+    Parameters
+    ----------
+    settings : dict
+        The merged settings, as for :func:`download`.
+    source : pathlib.Path
+        The local file.
+    remote : pathlib.PurePosixPath
+        Where to put it on the server.
+    archive_to : pathlib.PurePosixPath, optional
+        Where to keep an existing ``remote``; must not exist.
+    timeout, attempts, backoff
+        As for :func:`download`. Only the upload to the temporary name is retried;
+        archiving and renaming are tried once, because after a lost connection a
+        retry could not tell whether they had happened.
+
+    Returns
+    -------
+    int or None
+        The modification time of the uploaded file on the server (the time of the
+        upload), or None if the server sent none.
+
+    Raises
+    ------
+    TransferError
+        If ``remote`` exists and ``archive_to`` is not given, ``archive_to``
+        exists, access is denied, the server cannot make hard links, or the upload
+        still fails after the last attempt. The message says which step failed
+        and whether the file at ``remote`` is unchanged; the temporary file and a
+        new archive name are removed when that is safe, or else named. (A rename
+        the server reports as failed but did, its answer lost, counts as done,
+        with a warning.)
+    AuthError, ConfigError, ValueError
+        As for :func:`download`.
+    PathError
+        If the local file cannot be read, or changes during the upload.
+    """
+    temporary = remote.parent / f".{remote.name}.{secrets.token_hex(4)}.part"
+    left = set()  # temporary files that may still be on the server
+
+    def prepare(sftp):
+        for path in list(left):  # from an attempt that lost its connection
+            if _remove(sftp, path):
+                left.discard(path)
+        try:
+            current = sftp.stat(str(remote))
+            mode, existed = current.st_mode, True
+        except FileNotFoundError:
+            current, mode, existed = None, None, False
+        if mode is not None and not stat_module.S_ISREG(mode):
+            raise TransferError(
+                f"cannot upload {remote}: it is a folder (or another non-file) on "
+                "the server"
+            )
+        if existed and archive_to is None:
+            raise TransferError(
+                f"{remote} is already on the server; an upload replaces a file only "
+                "when the old one is archived (archive_to)"
+            )
+        if archive_to is not None and _exists(sftp, archive_to):
+            raise TransferError(
+                f"cannot archive {remote} as {archive_to}: {archive_to} is already "
+                "on the server"
+            )
+        try:  # before anything is made on the server
+            file = open(source, "rb")  # noqa: SIM115 - closed below
+        except OSError as error:
+            raise PathError(f"cannot read {source}: {error}") from error
+        with file:
+            _make_dirs(sftp, remote.parent)
+            if existed:  # before sending the data, so that a problem shows early
+                _make_dirs(sftp, archive_to.parent)
+            left.add(temporary)
+            try:
+                before = os.fstat(file.fileno())
+                attributes = sftp.putfo(
+                    _Source(file, source), str(temporary), confirm=True
+                )
+                after = os.fstat(file.fileno())
+                if (before.st_size, before.st_mtime_ns) != (
+                    after.st_size,
+                    after.st_mtime_ns,
+                ):
+                    raise PathError(
+                        f"{source} changed during the upload; upload it again when "
+                        "it is complete"
+                    )
+                sftp.chmod(str(temporary), _MODE)
+            except BaseException:
+                if _remove(sftp, temporary):
+                    left.discard(temporary)
+                raise
+        # The size, if it equals the size of the file being replaced.
+        same_size = (
+            before.st_size if existed and current.st_size == before.st_size else None
+        )
+        # The time of the upload: chmod and the rename do not change it.
+        return existed, same_size, attributes.st_mtime
+
+    reported = False  # whether a failure message already accounts for the files
+
+    linking = False  # whether an archive name may have been made
+
+    def finish(sftp):
+        nonlocal reported, linking
+        reported = True
+        step = "renaming it to"
+        archived = False
+        try:
+            if existed:
+                step = f"archiving the old {remote} as {archive_to} before replacing"
+                linking = True
+                _hardlink(sftp, remote, archive_to)
+                archived = True
+                step = "replacing"
+                sftp.posix_rename(str(temporary), str(remote))
+            else:
+                sftp.rename(str(temporary), str(remote))
+            left.clear()
+            linking = False
+        except _ERRORS as error:
+            # A rename either happened or did not; whether the temporary file is
+            # still there tells which, also when only the answer was lost.
+            present = _exists_or_unknown(sftp, temporary)
+            renaming = archived or not existed
+            if renaming and present is False:
+                _config.logger.warning(
+                    "the server reported a failure renaming %s to %s (%s), but the "
+                    "file is in place",
+                    temporary,
+                    remote,
+                    error,
+                )
+            else:
+                cause = error
+                if not existed:
+                    cause = f"{error}; did {remote} appear on the server meanwhile?"
+                if renaming and present is None:  # the connection failed
+                    stray = [temporary, archive_to] if archived else [temporary]
+                    done = "replaced" if existed else "created"
+                    outcome = f"it is not known whether {remote} was {done}"
+                else:
+                    # Nothing was renamed: remote is as it was, and the temporary
+                    # file and an archive name made here are spares.
+                    stray = [] if _remove(sftp, temporary) else [temporary]
+                    if archived and not _remove(sftp, archive_to):
+                        stray.append(archive_to)
+                    outcome = (
+                        "the server file is unchanged"
+                        if existed
+                        else f"{remote} was not created"
+                    )
+                    if (
+                        existed
+                        and not archived
+                        and not isinstance(error, _NoHardLinks)
+                        and _exists_or_unknown(sftp, archive_to) is not False
+                    ):
+                        # The link may have been made with its answer lost, or
+                        # someone else may have put a file there meanwhile.
+                        outcome += (
+                            f"; {archive_to} may now be on the server: if it has "
+                            f"the same content as {remote}, this upload made it as a "
+                            "second name of the old file, and it can be deleted "
+                            "before trying again"
+                        )
+                raise TransferError(
+                    f"uploaded {source} to the temporary file {temporary}, but "
+                    f"{step} {remote} failed ({cause}); {outcome}"
+                    + (
+                        f"; left on the server: {', '.join(map(str, stray))}"
+                        if stray
+                        else ", and the temporary file was removed"
+                    )
+                ) from error
+
+    try:
+        existed, same_size, mtime = _run(
+            settings,
+            remote,
+            _denied_is_final(prepare, remote),
+            "upload",
+            timeout=timeout,
+            attempts=attempts,
+            backoff=backoff,
+            use_cache=False,
+        )
+        if same_size is not None:
+            # Often new data (HDF5 files keep their size), but maybe the same file
+            # again, which every user would then download again.
+            _config.logger.warning(
+                "replacing %s with a file of the same size (%d bytes); if it is "
+                "the same file, the upload only makes every user download it again",
+                remote,
+                same_size,
+            )
+        if archive_to is not None and not existed:
+            _config.logger.warning(
+                "uploading %s to %s: there is nothing to archive as %s",
+                source,
+                remote,
+                archive_to,
+            )
+        _run(
+            settings,
+            remote,
+            finish,
+            "upload",
+            timeout=timeout,
+            attempts=1,
+            backoff=backoff,
+            use_cache=False,
+        )
+    except TransferError as error:
+        if left and not reported:
+            raise type(error)(
+                f"{error}; the temporary file {temporary} may be left on the server"
+            ) from error
+        raise
+    except BaseException:  # interrupted, for example with Ctrl-C
+        stray = [*map(str, left), *([str(archive_to)] if linking else [])]
+        if stray:
+            _config.logger.warning(
+                "the upload of %s to %s was interrupted; this may be left on the "
+                "server: %s",
+                source,
+                remote,
+                ", ".join(stray),
+            )
+        raise
+    _config.logger.info(
+        "uploaded %s to %s%s",
+        source,
+        remote,
+        f", archiving the old file as {archive_to}" if existed else "",
+    )
+    return mtime
+
+
+def _denied_is_final(action, remote):
+    """Wrap an upload action so that a missing or denied path is not retried."""
+
+    def run(sftp):
+        try:
+            return action(sftp)
+        except OSError as error:
+            if error.errno not in (errno.ENOENT, errno.EACCES):
+                raise
+            raise TransferError(
+                f"cannot upload {remote}: {error.strerror or error} on the server"
+            ) from error
+
+    return run
+
+
+def _exists(sftp, remote):
+    """Return whether anything is at remote on the server."""
+    try:
+        sftp.stat(str(remote))
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _exists_or_unknown(sftp, remote):
+    """Return whether anything is at remote on the server, or None if unknown."""
+    try:
+        return _exists(sftp, remote)
+    except _ERRORS:
+        return None
+
+
+def _make_dirs(sftp, directory):
+    """Create directory and its missing parents on the server, with mode 0755.
+
+    Raises TransferError if a file is in the way.
+    """
+    missing = []
+    while directory != directory.parent:
+        try:
+            mode = sftp.stat(str(directory)).st_mode
+        except FileNotFoundError:
+            missing.append(directory)
+            directory = directory.parent
+            continue
+        if mode is not None and not stat_module.S_ISDIR(mode):
+            raise TransferError(
+                f"cannot create a folder below {directory}: it is a file on the server"
+            )
+        break
+    for path in reversed(missing):
+        sftp.mkdir(str(path))
+        sftp.chmod(str(path), _DIRECTORY_MODE)  # mkdir's mode is cut by the umask
+
+
+class _Source:
+    """The local file being uploaded; its read errors raise PathError.
+
+    So a local problem is not mistaken for a transfer error and retried.
+    """
+
+    def __init__(self, file, path):
+        self._file = file
+        self._path = path
+
+    def read(self, size=-1):
+        try:
+            return self._file.read(size)
+        except OSError as error:
+            raise PathError(f"cannot read {self._path}: {error}") from error
+
+
+class _NoHardLinks(OSError):
+    """The server does not support OpenSSH's hard-link extension."""
+
+
+def _hardlink(sftp, old, new):
+    """Give the server file old the second name new (OpenSSH's extension).
+
+    paramiko has no method for it, so the request is sent the way paramiko's own
+    ``posix_rename`` sends ``posix-rename@openssh.com``.
+    """
+    try:
+        sftp._request(CMD_EXTENDED, "hardlink@openssh.com", str(old), str(new))
+    except OSError as error:
+        if "unsupported" not in str(error).lower():
+            raise
+        raise _NoHardLinks(
+            "the server does not support hard links (hardlink@openssh.com), which "
+            "archiving needs"
+        ) from error
+
+
+def _remove(sftp, path):
+    """Remove a server file; return whether it is gone."""
+    try:
+        sftp.remove(str(path))
+    except FileNotFoundError:
+        return True
+    except _ERRORS:
+        return False
+    return True
 
 
 def _server_file_error(remote, error):

@@ -101,6 +101,7 @@ def test_local_path_rejects_invalid_keys(home, key, reason):
 
 SETTINGS = {
     "private_root": "private_html",
+    "public_root": "public_html",
     "public_url": "https://deep.reak.bme.hu/~data",
 }
 
@@ -127,6 +128,18 @@ def test_private_remote_with_an_absolute_root():
 def test_private_remote_rejects_invalid_keys(key, reason):
     with pytest.raises(PathError, match="invalid data key"):
         _paths.private_remote(SETTINGS, "renate-od", key)
+
+
+def test_public_remote():
+    assert _paths.public_remote(
+        SETTINGS, "renate-od", "atomic_data/Na/rates.h5"
+    ) == PurePosixPath("public_html/renate-od/atomic_data/Na/rates.h5")
+
+
+@pytest.mark.parametrize(("key", "reason"), INVALID_KEYS[:4])
+def test_public_remote_rejects_invalid_keys(key, reason):
+    with pytest.raises(PathError, match="invalid data key"):
+        _paths.public_remote(SETTINGS, "renate-od", key)
 
 
 def test_public_url():
