@@ -533,7 +533,16 @@ def upload(
         for path in list(left):  # from an attempt that lost its connection
             if _remove(sftp, path):
                 left.discard(path)
-        existed = _exists(sftp, remote)
+        try:
+            mode = sftp.stat(str(remote)).st_mode
+            existed = True
+        except FileNotFoundError:
+            mode, existed = None, False
+        if mode is not None and not stat_module.S_ISREG(mode):
+            raise TransferError(
+                f"cannot upload {remote}: it is a folder (or another non-file) on "
+                "the server"
+            )
         if existed and archive_to is None:
             raise TransferError(
                 f"{remote} is already on the server; an upload replaces a file only "
@@ -550,6 +559,8 @@ def upload(
             raise PathError(f"cannot read {source}: {error}") from error
         with file:
             _make_dirs(sftp, remote.parent)
+            if existed:  # before sending the data, so that a problem shows early
+                _make_dirs(sftp, archive_to.parent)
             left.add(temporary)
             try:
                 sftp.putfo(file, str(temporary), confirm=True)
@@ -572,7 +583,6 @@ def upload(
         try:
             if existed:
                 step = f"archiving the old {remote} as {archive_to} before replacing"
-                _make_dirs(sftp, archive_to.parent)
                 linking = True
                 _hardlink(sftp, remote, archive_to)
                 archived = True
@@ -719,13 +729,26 @@ def _exists_or_unknown(sftp, remote):
 
 
 def _make_dirs(sftp, directory):
-    """Create directory and its missing parents on the server."""
+    """Create directory and its missing parents on the server, with mode 0755.
+
+    Raises TransferError if a file is in the way.
+    """
     missing = []
-    while directory != directory.parent and not _exists(sftp, directory):
-        missing.append(directory)
-        directory = directory.parent
+    while directory != directory.parent:
+        try:
+            mode = sftp.stat(str(directory)).st_mode
+        except FileNotFoundError:
+            missing.append(directory)
+            directory = directory.parent
+            continue
+        if mode is not None and not stat_module.S_ISDIR(mode):
+            raise TransferError(
+                f"cannot create a folder below {directory}: it is a file on the server"
+            )
+        break
     for path in reversed(missing):
-        sftp.mkdir(str(path), _DIRECTORY_MODE)
+        sftp.mkdir(str(path))
+        sftp.chmod(str(path), _DIRECTORY_MODE)  # mkdir's mode is cut by the umask
 
 
 class _NoHardLinks(OSError):

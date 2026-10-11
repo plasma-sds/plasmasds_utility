@@ -135,7 +135,13 @@ def test_upload_creates_directories_and_the_file(server, source, sleeps):
     mtime = upload(source)
     assert local(REMOTE).read_bytes() == b"new data"
     assert mtime == int(local(REMOTE).stat().st_mtime)  # SFTP sends whole seconds
-    assert list(stub.modes.values()) == [0o644]
+    assert stub.modes == {
+        "private_html": 0o755,
+        "private_html/renate-od": 0o755,
+        "private_html/renate-od/a": 0o755,
+        **{name: 0o644 for name in stub.modes if name.endswith(".part")},
+    }
+    assert sorted(stub.modes.values()) == [0o644, 0o755, 0o755, 0o755]
     assert stub.operations["mkdir"] == 3  # private_html, renate-od, a
     assert stub.operations["rename"] == 1
     assert leftovers(server) == []
@@ -209,6 +215,7 @@ def test_denied_upload_is_not_retried(server, source, sleeps, operation):
 
 def test_failing_upload_is_retried_then_reported(server, source, sleeps):
     stub, local = server
+    local(REMOTE).parent.mkdir(parents=True)  # chmod: only the file's
     stub.refused["chmod"] = paramiko.SFTP_FAILURE
     with pytest.raises(TransferError, match="cannot upload .* after 3 attempts"):
         upload(source)
@@ -220,6 +227,7 @@ def test_failing_upload_is_retried_then_reported(server, source, sleeps):
 @pytest.mark.parametrize("operation", ["write", "chmod"])
 def test_dropped_upload_is_retried_and_cleaned_up(server, source, sleeps, operation):
     stub, local = server
+    local(REMOTE).parent.mkdir(parents=True)  # chmod: only the file's
     stub.drop.add(operation)
     upload(source)
     assert local(REMOTE).read_bytes() == b"new data"
@@ -229,6 +237,7 @@ def test_dropped_upload_is_retried_and_cleaned_up(server, source, sleeps, operat
 
 def test_temporary_file_left_by_a_lost_connection_is_named(server, source, sleeps):
     stub, local = server
+    local(REMOTE).parent.mkdir(parents=True)  # chmod: only the file's
     stub.drop.add("chmod")
     with pytest.raises(TransferError, match=r"\.x\.h5\.\w+\.part may be left"):
         upload(source, attempts=1)
@@ -390,3 +399,31 @@ def test_interrupted_request_replaces_the_session(server, source, monkeypatch):
     upload(source)
     assert stub.connections == 2
     assert local(REMOTE).read_bytes() == b"new data"
+
+
+def test_folder_at_the_key_is_refused_before_sending(server, source, sleeps):
+    stub, local = server
+    local(REMOTE).mkdir(parents=True)
+    with pytest.raises(TransferError, match="it is a folder"):
+        upload(source, archive_to=ARCHIVE)
+    assert stub.operations["write"] == 0
+
+
+def test_file_in_the_way_of_the_archive_folder_is_refused_before_sending(
+    existing, source, sleeps
+):
+    stub, local = existing
+    inside_the_file = REMOTE / "old.h5"  # OpenSSH: "no such file", not ENOTDIR
+    with pytest.raises(TransferError, match=f"below {REMOTE}: it is a file"):
+        upload(source, archive_to=inside_the_file)
+    assert stub.operations["write"] == 0
+    assert local(REMOTE).read_bytes() == b"old data"
+
+
+def test_denied_archive_folder_is_refused_before_sending(existing, source, sleeps):
+    stub, local = existing
+    stub.refused["mkdir"] = paramiko.SFTP_PERMISSION_DENIED
+    with pytest.raises(TransferError, match="denied"):
+        upload(source, archive_to=ARCHIVE)
+    assert stub.operations["write"] == 0
+    assert stub.operations["mkdir"] == 1
