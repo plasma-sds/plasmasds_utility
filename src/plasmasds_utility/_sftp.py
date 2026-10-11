@@ -508,10 +508,11 @@ def upload(
     TransferError
         If ``remote`` exists and ``archive_to`` is not given, ``archive_to``
         exists, access is denied, the server cannot make hard links, or the upload
-        still fails after the last attempt. The message says which step failed;
-        the file at ``remote`` is then unchanged, and the temporary file and a new
-        archive name are removed if the connection still allows it, or else named
-        in the message.
+        still fails after the last attempt. The message says which step failed
+        and whether the file at ``remote`` is unchanged; the temporary file and a
+        new archive name are removed when that is safe, or else named. (A rename
+        the server reports as failed but did, its answer lost, counts as done,
+        with a warning.)
     AuthError, ConfigError, ValueError
         As for :func:`download`.
     PathError
@@ -569,24 +570,43 @@ def upload(
             else:
                 sftp.rename(str(temporary), str(remote))
         except _ERRORS as error:
-            removed = _remove(sftp, temporary)
-            if archived:
-                removed = _remove(sftp, archive_to) and removed
-            cause = error
-            if not existed:
-                cause = f"{error}; did {remote} appear on the server meanwhile?"
-            elif not archived and not isinstance(error, _NoHardLinks):
-                cause = f"{error}; did {archive_to} appear on the server meanwhile?"
-            raise TransferError(
-                f"uploaded {source} to the temporary file {temporary}, but {step} "
-                f"{remote} failed ({cause}); "
-                + (
-                    "the server file is unchanged, and the temporary file was removed"
-                    if removed
-                    else "the temporary file (and the archive name, if it was made) "
-                    "may be left on the server"
+            # A rename either happened or did not; whether the temporary file is
+            # still there tells which, also when only the answer was lost.
+            present = _exists_or_unknown(sftp, temporary)
+            renaming = archived or not existed
+            if renaming and present is False:
+                _config.logger.warning(
+                    "the server reported a failure renaming %s to %s (%s), but the "
+                    "file is in place",
+                    temporary,
+                    remote,
+                    error,
                 )
-            ) from error
+            else:
+                cause = error
+                if not existed:
+                    cause = f"{error}; did {remote} appear on the server meanwhile?"
+                elif not archived and not isinstance(error, _NoHardLinks):
+                    cause = f"{error}; did {archive_to} appear on the server meanwhile?"
+                if present is None:  # the connection failed: touch nothing
+                    left = [temporary, archive_to] if archived else [temporary]
+                    outcome = f"it is not known whether {remote} was replaced"
+                else:
+                    # The old file was not replaced, so it is still at remote and
+                    # a new archive name is a spare: only then is it removed.
+                    left = [] if _remove(sftp, temporary) else [temporary]
+                    if archived and not _remove(sftp, archive_to):
+                        left.append(archive_to)
+                    outcome = "the server file is unchanged"
+                raise TransferError(
+                    f"uploaded {source} to the temporary file {temporary}, but "
+                    f"{step} {remote} failed ({cause}); {outcome}"
+                    + (
+                        f"; left on the server: {', '.join(map(str, left))}"
+                        if left
+                        else ", and the temporary file was removed"
+                    )
+                ) from error
         try:
             return sftp.stat(str(remote)).st_mtime
         except _ERRORS as error:
@@ -664,6 +684,14 @@ def _exists(sftp, remote):
     except FileNotFoundError:
         return False
     return True
+
+
+def _exists_or_unknown(sftp, remote):
+    """Return whether anything is at remote on the server, or None if unknown."""
+    try:
+        return _exists(sftp, remote)
+    except _ERRORS:
+        return None
 
 
 def _make_dirs(sftp, directory):

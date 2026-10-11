@@ -281,11 +281,63 @@ def test_file_appearing_during_the_upload_is_not_replaced(server, source, sleeps
 def test_lost_connection_while_replacing_leaves_the_files(existing, source, sleeps):
     stub, local = existing
     stub.drop.add("posix-rename")
-    with pytest.raises(TransferError, match="may be left on the server"):
+    with pytest.raises(TransferError, match="not known whether .* was replaced") as e:
         upload(source, archive_to=ARCHIVE)
+    assert "left on the server: private_html/renate-od/a/.x.h5." in str(e.value)
+    assert str(ARCHIVE) in str(e.value).split("left on the server")[1]
     assert local(REMOTE).read_bytes() == b"old data"
     assert local(ARCHIVE).read_bytes() == b"old data"  # kept: it may be the only copy
     assert len(leftovers(existing)) == 1
+
+
+def test_replace_done_but_its_answer_lost_keeps_the_archive(
+    existing, source, monkeypatch, caplog
+):
+    stub, local = existing
+    posix_rename = paramiko.SFTPClient.posix_rename
+
+    def rename_then_time_out(sftp, old, new):
+        posix_rename(sftp, old, new)
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(paramiko.SFTPClient, "posix_rename", rename_then_time_out)
+    assert upload(source, archive_to=ARCHIVE) is not None
+    assert local(REMOTE).read_bytes() == b"new data"
+    assert local(ARCHIVE).read_bytes() == b"old data"  # the only copy: never removed
+    assert "but the file is in place" in caplog.text
+    assert leftovers(existing) == []
+
+
+def test_rename_done_but_its_answer_lost_counts_as_done(
+    server, source, monkeypatch, caplog
+):
+    stub, local = server
+    rename = paramiko.SFTPClient.rename
+
+    def rename_then_time_out(sftp, old, new):
+        rename(sftp, old, new)
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(paramiko.SFTPClient, "rename", rename_then_time_out)
+    upload(source)
+    assert local(REMOTE).read_bytes() == b"new data"
+    assert "but the file is in place" in caplog.text
+
+
+def test_hard_link_made_but_its_answer_lost_is_kept(existing, source, monkeypatch):
+    stub, local = existing
+    hardlink = _sftp._hardlink
+
+    def link_then_time_out(sftp, old, new):
+        hardlink(sftp, old, new)
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(_sftp, "_hardlink", link_then_time_out)
+    with pytest.raises(TransferError, match="server file is unchanged"):
+        upload(source, archive_to=ARCHIVE)
+    assert local(REMOTE).read_bytes() == b"old data"
+    assert local(ARCHIVE).read_bytes() == b"old data"  # a second name: harmless
+    assert leftovers(existing) == []
 
 
 def test_unreadable_upload_time_only_warns(server, source, monkeypatch, caplog):
