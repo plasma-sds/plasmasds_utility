@@ -34,6 +34,9 @@ Decisions already made (do not re-open them without an owner):
   A file restored on the server with an older modification time must be given a fresh one (`touch`) to reach users.
   (Decided 2026-09-30, refined 2026-10-07 and 2026-10-08 on #15.)
 - Re-downloads triggered by a failed verification are bounded; they never loop.
+- Uploads never lose data on the server: a file there is replaced only when the caller names a key to keep the old one under (`archive_to`, a hard link on the server), and the client owns its archive layout.
+  There is no overwrite flag, and the utility never deletes files on the server.
+  (Decided 2026-10-11 on #16.)
 - Failures are loud and specific: package-specific exception classes, messages that say where the failure happened, and a rotating log file.
 
 ### Commands
