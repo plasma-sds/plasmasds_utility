@@ -665,8 +665,8 @@ class DataClient:
 
         >>> data = DataClient("renate-od")
         >>> data.upload(
-        ...     "crm_systemtests/actual/case1.h5",
-        ...     archive_to="crm_systemtests/archive/1.3.1/case1.h5",
+        ...     "test_dataset/crm_systemtests/actual/case1.h5",
+        ...     archive_to="test_dataset/crm_systemtests/archive/1.3.1/case1.h5",
         ... )  # doctest: +SKIP
         """
         _paths.check_key(key)
