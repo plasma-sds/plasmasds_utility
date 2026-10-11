@@ -40,6 +40,7 @@ from plasmasds_utility.exceptions import (
     AuthError,
     ConfigError,
     PathError,
+    PlasmasdsUtilityError,
     TransferError,
 )
 
@@ -334,6 +335,13 @@ def _run(settings, remote, action, verb, *, timeout, attempts, backoff, use_cach
                     raise auth_error from error
                 _close(server)
                 last_error = error
+            except PlasmasdsUtilityError:
+                raise  # a refusal: the session is fine
+            except BaseException:
+                # Interrupted (Ctrl-C, say) in the middle of a request: the channel
+                # may be out of step, so the next call starts a new session.
+                _close(server)
+                raise
         _config.logger.warning(
             "%s of %s failed (attempt %d of %d): %s",
             verb,
@@ -554,8 +562,10 @@ def upload(
 
     reported = False  # whether a failure message already accounts for the files
 
+    linking = False  # whether an archive name may have been made
+
     def finish(sftp):
-        nonlocal reported
+        nonlocal reported, linking
         reported = True
         step = "renaming it to"
         archived = False
@@ -563,12 +573,15 @@ def upload(
             if existed:
                 step = f"archiving the old {remote} as {archive_to} before replacing"
                 _make_dirs(sftp, archive_to.parent)
+                linking = True
                 _hardlink(sftp, remote, archive_to)
                 archived = True
                 step = "replacing"
                 sftp.posix_rename(str(temporary), str(remote))
             else:
                 sftp.rename(str(temporary), str(remote))
+            left.clear()
+            linking = False
         except _ERRORS as error:
             # A rename either happened or did not; whether the temporary file is
             # still there tells which, also when only the answer was lost.
@@ -589,21 +602,21 @@ def upload(
                 elif not archived and not isinstance(error, _NoHardLinks):
                     cause = f"{error}; did {archive_to} appear on the server meanwhile?"
                 if present is None:  # the connection failed: touch nothing
-                    left = [temporary, archive_to] if archived else [temporary]
+                    stray = [temporary, archive_to] if archived else [temporary]
                     outcome = f"it is not known whether {remote} was replaced"
                 else:
                     # The old file was not replaced, so it is still at remote and
                     # a new archive name is a spare: only then is it removed.
-                    left = [] if _remove(sftp, temporary) else [temporary]
+                    stray = [] if _remove(sftp, temporary) else [temporary]
                     if archived and not _remove(sftp, archive_to):
-                        left.append(archive_to)
+                        stray.append(archive_to)
                     outcome = "the server file is unchanged"
                 raise TransferError(
                     f"uploaded {source} to the temporary file {temporary}, but "
                     f"{step} {remote} failed ({cause}); {outcome}"
                     + (
-                        f"; left on the server: {', '.join(map(str, left))}"
-                        if left
+                        f"; left on the server: {', '.join(map(str, stray))}"
+                        if stray
                         else ", and the temporary file was removed"
                     )
                 ) from error
@@ -651,6 +664,17 @@ def upload(
             raise type(error)(
                 f"{error}; the temporary file {temporary} may be left on the server"
             ) from error
+        raise
+    except BaseException:  # interrupted, for example with Ctrl-C
+        stray = [*map(str, left), *([str(archive_to)] if linking else [])]
+        if stray:
+            _config.logger.warning(
+                "the upload of %s to %s was interrupted; this may be left on the "
+                "server: %s",
+                source,
+                remote,
+                ", ".join(stray),
+            )
         raise
     _config.logger.info(
         "uploaded %s to %s%s",

@@ -353,3 +353,40 @@ def test_unreadable_upload_time_only_warns(server, source, monkeypatch, caplog):
     assert upload(source) is None
     assert local(REMOTE).read_bytes() == b"new data"
     assert "cannot read its modification time" in caplog.text
+
+
+def test_interrupted_upload_names_what_may_be_left(
+    existing, source, monkeypatch, caplog
+):
+    stub, local = existing
+
+    def interrupt(sftp, old, new):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(paramiko.SFTPClient, "posix_rename", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        upload(source, archive_to=ARCHIVE)
+    assert "was interrupted; this may be left on the server" in caplog.text
+    assert ".x.h5." in caplog.text
+    assert str(ARCHIVE) in caplog.text
+    assert local(REMOTE).read_bytes() == b"old data"
+
+
+def test_interrupted_request_replaces_the_session(server, source, monkeypatch):
+    stub, local = server
+    putfo = paramiko.SFTPClient.putfo
+    calls = []
+
+    def interrupt_once(sftp, *args, **kwargs):
+        if not calls:
+            calls.append(1)
+            raise KeyboardInterrupt
+        return putfo(sftp, *args, **kwargs)
+
+    monkeypatch.setattr(paramiko.SFTPClient, "putfo", interrupt_once)
+    with pytest.raises(KeyboardInterrupt):
+        upload(source)
+    assert _sftp._sessions == {}
+    upload(source)
+    assert stub.connections == 2
+    assert local(REMOTE).read_bytes() == b"new data"
