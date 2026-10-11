@@ -1,20 +1,56 @@
 # plasmasds_utility
 
-A shared utility package for the plasma-sds synthetic diagnostics (renate, neuro_bes, synref, …).
-Its first job is data access: fetching the data files a package needs from the group's data server when they are not available locally, and uploading data to the server on request.
+A shared utility for the plasma-sds synthetic diagnostics (renate, neuro_bes, synref, bolometer, …): it moves the data files a package needs between the group's data server and the user's computer.
 
-> **Status:** early development, no release yet.
-> What works so far: choosing where each client's data is stored, where each data file goes, downloading private and public data, checking the server for newer data, and uploading (below).
+- It downloads a file when it is missing locally: private data over SFTP with an SSH key, public data over HTTPS without one.
+- It checks the server for newer versions when asked, and uploads data on request without ever losing a file on the server.
+- It serves several client packages, each with its own folder on the server and locally; the local tree mirrors the server.
+- It runs on Linux and Windows with Python 3.11 or newer; its only dependency is paramiko.
 
-## Planned scope (first version)
-
-- Download data files, `.dll` files or `.onnx` networks when they are missing from the expected local path.
-- Download from private (SSH key) and public sources.
-- Upload local data to the server on request.
-- Serve several client packages, each with its own directory on the server and locally.
-- Keep the local data tree a mirror of the server tree.
+> **Status:** not released yet; the first release is tracked in [#30](https://github.com/plasma-sds/plasmasds_utility/issues/30).
+> Until then, install it from GitHub (below).
 
 The design and the decisions that amend it are in [issue #6](https://github.com/plasma-sds/plasmasds_utility/issues/6); progress is tracked on the [project board](https://github.com/orgs/plasma-sds/projects/10).
+
+## Installing
+
+```bash
+pip install "plasmasds_utility @ git+https://github.com/plasma-sds/plasmasds_utility@development"
+```
+
+Once it is released, this becomes `pip install plasmasds_utility`.
+To check that it can reach the data server, run `python -c "import plasmasds_utility; plasmasds_utility.check_connection()"` (see [Troubleshooting](https://github.com/plasma-sds/plasmasds_utility#troubleshooting)).
+
+## Using it in a client package
+
+A client package declares the dependency in its `pyproject.toml`:
+
+```toml
+[project]
+dependencies = [
+    # until the first release:
+    "plasmasds_utility @ git+https://github.com/plasma-sds/plasmasds_utility@development",
+    # afterwards: "plasmasds_utility>=0.1",
+]
+```
+
+A package published on PyPI cannot depend on a GitHub address, so a client is published only after the first release of this utility.
+
+The client creates one `DataClient` for its own folder on the server, its *prefix*, usually its package name, and asks it for files wherever it needs them:
+
+```python
+# mypackage/data.py
+from plasmasds_utility import DataClient
+
+data = DataClient("mypackage")  # reads and writes nothing until first used
+
+
+def rates(element):
+    return data.get(f"atomic_data/{element}/rates.h5")
+```
+
+The client's folders on the server are created by its first upload.
+Runnable examples for a terminal and for a notebook are in [`examples/`](https://github.com/plasma-sds/plasmasds_utility/tree/master/examples).
 
 ## Getting data
 
@@ -101,8 +137,8 @@ data.upload(key)  # the local private copy, to the private server
 data.upload(key, private=False)  # the local public copy, to the public server
 ```
 
-`upload` sends the local copy of a key (see [Where files go](#where-files-go)) to the same key on the server.
-It uses SFTP for both trees, so it needs an SSH key (see [Private data](#private-data)) even for public data.
+`upload` sends the local copy of a key (see [Where files go](https://github.com/plasma-sds/plasmasds_utility#where-files-go)) to the same key on the server.
+It uses SFTP for both trees, so it needs an SSH key (see [Private data](https://github.com/plasma-sds/plasmasds_utility#private-data)) even for public data.
 
 An upload never loses data on the server: a file that is already there is replaced only when you name another key, in the same tree, to keep the old one under.
 For example, a release of renate keeps the previous reference results with the version that made them:
@@ -196,7 +232,7 @@ You can also edit it by hand:
 ```
 
 The other settings it may override are `host`, `port`, `user`, `private_root`, `public_root`, `public_url` and `host_keys`; a value must have the same type as the default.
-What each one means, and how server paths are built from them, is explained in the packaged [`defaults.toml`](src/plasmasds_utility/data/defaults.toml).
+What each one means, and how server paths are built from them, is explained in the packaged [`defaults.toml`](https://github.com/plasma-sds/plasmasds_utility/blob/master/src/plasmasds_utility/data/defaults.toml).
 An invalid value stops the utility with a `ConfigError` that names the file and the setting.
 An unknown setting is ignored with a warning, so a file written by a newer version still works with an older one.
 
@@ -205,17 +241,70 @@ An unknown setting is ignored with a warning, so a file written by a newer versi
 The utility logs what it does to `plasmasds.log` (rotated at 1 MB, three old files kept).
 Warnings and errors are also printed to stderr.
 
+## Troubleshooting
+
+Start with the connection check, in Python or a notebook:
+
+```python
+import plasmasds_utility
+
+plasmasds_utility.check_connection()
+```
+
+It downloads a small test file kept on the server, over HTTPS and over SFTP, into a temporary folder, and prints the settings in use and what failed:
+
+```text
+plasmasds_utility connection check
+  server: data@deep.reak.bme.hu, port 72; public data: https://deep.reak.bme.hu/~data
+  SSH key: none saved (the SSH agent and ~/.ssh/id_* keys)
+  data folder: /home/me/.local/share/plasmasds
+  public data (HTTPS): ok
+  private data (SFTP): failed: no SSH key found for data@[deep.reak.bme.hu]:72: ...
+```
+
+The report holds no secrets (the SSH key appears only as a file name), so it can be sent along with a question.
+The usual failures:
+
+- **"no SSH key found"** or **"SSH login … failed":** save the key the server accepts with `plasmasds_utility.set_ssh_key()`; if you have none, ask the server's admins to add your public key.
+- **"has a passphrase":** load the key into the SSH agent with `ssh-add`, then restart Python (or the Python kernel).
+- **"remembered until then":** a login or host key failure is remembered for the session, so restart Python after fixing it; `set_ssh_key()` takes effect at once.
+- **"the host key … does not match":** if the server was reinstalled, remove its line from `~/.ssh/known_hosts` and restart Python; otherwise do not connect, as someone may be impersonating the server.
+- **Timeouts for private data only:** the network may block the SSH port (72); try another network or a VPN.
+  Public data uses HTTPS, which goes through a proxy set in `HTTPS_PROXY`; SFTP does not.
+
+The [log](https://github.com/plasma-sds/plasmasds_utility#the-log) has the details of every failure.
+
 ## Development
 
 - `master` holds released code and is updated from `development` by the owners only.
 - `development` is the integration branch.
   All work happens on feature branches and arrives through pull requests into `development`.
-- The development environment is managed with [pixi](https://pixi.sh): `pixi run test` runs the tests and `pixi run lint` checks the code.
 - Design questions go to [Discussions](https://github.com/plasma-sds/plasmasds_utility/discussions); planned work is tracked as issues.
 
+The development environment is managed with [pixi](https://pixi.sh), whose configuration is in `pyproject.toml`:
+
+```bash
+pixi run test  # the tests, on the newest supported Python
+pixi run -e py311 test  # on one Python version, py311 to py314
+pixi run lint  # ruff lint and format check
+```
+
+Without pixi, a virtual environment works too:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate  # on Windows: .venv\Scripts\activate
+pip install -e . pytest ruff nbclient ipykernel
+pytest
+ruff check . && ruff format --check .
+```
+
+Tests marked `network` download from the public data server and run by default; offline, use `pytest -m "not private and not network"`.
+Tests marked `private` need an SSH key for the data server and are deselected by default; the [agent instructions](https://github.com/plasma-sds/plasmasds_utility/blob/master/AGENTS.md#commands) explain how to run them.
+
 This repository is developed largely by LLM coding agents under review by the owners.
-The rules agents follow are in [AGENTS.md](AGENTS.md), with Claude Code specifics in [CLAUDE.md](CLAUDE.md).
+The rules agents follow are in [AGENTS.md](https://github.com/plasma-sds/plasmasds_utility/blob/master/AGENTS.md), with Claude Code specifics in [CLAUDE.md](https://github.com/plasma-sds/plasmasds_utility/blob/master/CLAUDE.md).
 
 ## License
 
-[LGPL-2.1](LICENSE)
+[LGPL-2.1](https://github.com/plasma-sds/plasmasds_utility/blob/master/LICENSE)
