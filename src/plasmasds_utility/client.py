@@ -1,6 +1,7 @@
 """The public entry point: one :class:`DataClient` per client package."""
 
 import atexit
+import os
 import re
 import sys
 from pathlib import Path
@@ -606,6 +607,97 @@ class DataClient:
                 except (TransferError, PathError) as error:
                     failed.append((key, error))
                     _config.logger.warning("cannot check %s: %s", path, error)
+
+    def upload(self, key, *, private=True, archive_to=None):
+        """Upload the local copy of a data file to the server.
+
+        The file at :meth:`local_path` is uploaded over SFTP to the same key on the
+        server, private or public; both need an SSH key with access to the server
+        (see :func:`set_ssh_key`). Missing directories are created.
+
+        An upload never loses data on the server: a file already there is replaced
+        only when ``archive_to`` is given, and is then kept under that key first.
+        The client package decides its archive layout, for example
+        ``archive/<version>/<key>``; use a folder it reserves for archives. If
+        nothing is at ``key`` yet, the file is uploaded with a warning that there
+        was nothing to archive. People reading the file from the server see the
+        complete old or the complete new file, never a partial one.
+
+        The uploaded file is readable by everyone on the server (mode 0644), which
+        public data needs to be downloadable over HTTPS. Its modification time on
+        the server is the time of the upload; the local copy is given the same
+        time, so ``get(key, update="if_newer")`` does not download it again.
+
+        Parameters
+        ----------
+        key : str
+            The data key (see :meth:`local_path`).
+        private : bool, default True
+            True to upload the local private copy to the private server tree,
+            False the local public copy to the public tree.
+        archive_to : str, optional
+            The key under which to keep the file currently on the server, in the
+            same tree. Nothing may be there yet.
+
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        PathError
+            If ``key`` or ``archive_to`` is invalid, they are the same key, or the
+            local copy is missing or cannot be read.
+        TransferError
+            If the file is on the server and ``archive_to`` is not given, something
+            is at ``archive_to`` already, the server refuses a step, or the upload
+            fails after the retries. The message says which step failed; the file
+            on the server is then unchanged.
+        AuthError
+            If private data is not available to you (see :meth:`get`).
+        ConfigError
+            As for :meth:`get`.
+
+        Examples
+        --------
+        Replace a reference file, keeping the old one with the version that
+        made it:
+
+        >>> data = DataClient("renate-od")
+        >>> data.upload(
+        ...     "crm_systemtests/actual/case1.h5",
+        ...     archive_to="crm_systemtests/archive/1.3.1/case1.h5",
+        ... )  # doctest: +SKIP
+        """
+        _paths.check_key(key)
+        if archive_to is not None:
+            _paths.check_key(archive_to)
+            if archive_to == key:
+                raise PathError(f"cannot archive {key!r} under its own key")
+        path = self.local_path(key, private=private)
+        if not path.is_file():
+            raise PathError(f"cannot upload {key!r}: {path} is not a file")
+        settings = _config.settings()
+        remote = _paths.private_remote if private else _paths.public_remote
+        mtime = _sftp.upload(
+            settings,
+            path,
+            remote(settings, self.prefix, key),
+            archive_to=(
+                None
+                if archive_to is None
+                else remote(settings, self.prefix, archive_to)
+            ),
+        )
+        if mtime is not None:
+            try:
+                os.utime(path, (mtime, mtime))
+            except OSError as error:
+                _config.logger.warning(
+                    "cannot give %s the upload time of the server copy: %s",
+                    path,
+                    error,
+                )
 
     def set_working_dir(self, path):
         """Save the working directory for this client in the user configuration.
