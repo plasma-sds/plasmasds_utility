@@ -231,6 +231,18 @@ def close_all():
 atexit.register(close_all)
 
 
+def forget(settings):
+    """Close the session of one server and forget its remembered login failure.
+
+    The next request connects afresh; used by the connection check, which must
+    test the connection as it is now.
+    """
+    server = _server(settings)
+    with _lock:
+        _close(server)
+        _unavailable.pop(server, None)
+
+
 def download(
     settings, remote, target, *, use_cache=True, timeout=30, attempts=3, backoff=1.0
 ):
@@ -354,7 +366,8 @@ def _run(settings, remote, action, verb, *, timeout, attempts, backoff, use_cach
         if attempt < attempts:
             time.sleep(backoff * 2 ** (attempt - 1))
     raise TransferError(
-        f"cannot {verb} {remote} on {server[0]} after {attempts} attempts: {last_error}"
+        f"cannot {verb} {remote} on {server[0]} after {attempts} "
+        f"attempt{'s' if attempts > 1 else ''}: {last_error}"
     ) from last_error
 
 

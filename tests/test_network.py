@@ -155,5 +155,7 @@ def test_check_connection_against_the_data_server(home, capsys):
     if not SSH_KEY:
         pytest.skip("set PLASMASDS_TEST_SSH_KEY to a key for the private data server")
     plasmasds_utility.set_ssh_key(SSH_KEY)
-    assert plasmasds_utility.check_connection() == {"public": None, "private": None}
-    assert "private data (SFTP): ok" in capsys.readouterr().out
+    plasmasds_utility.check_connection()
+    out = capsys.readouterr().out
+    assert "public data (HTTPS): ok" in out
+    assert "private data (SFTP): ok" in out

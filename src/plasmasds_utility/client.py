@@ -859,17 +859,19 @@ def check_connection():
     Downloads a small test file that is kept on the server for this, once from
     the public data over HTTPS and once from the private data over SFTP, into a
     temporary folder that is removed afterwards; nothing is written to the data
-    folders. Each way is tried once, so a blocked port shows within the 30-second
-    timeout instead of after retries. The SFTP check asks the server again even
-    about a file remembered as missing. A report is printed to standard output
-    and logged: the settings in use (server, SSH key, data folder) and, for each
-    way of access, "ok" or why it failed.
+    folders. Each way is tried once, so a blocked port shows after about 30
+    seconds instead of after retries. The SFTP check always connects afresh: it
+    forgets an open session and a remembered login failure, so it also shows
+    whether a fix (for example ``ssh-add``) worked, without restarting Python.
+
+    A report is printed to standard output and logged: the version, the settings
+    in use (server, SSH key, data folder, log file) and, for each way of access,
+    "ok" or why it failed.
 
     Returns
     -------
-    dict
-        ``{"public": error, "private": error}``, where ``error`` is None if the
-        test file was downloaded and correct, else the error message.
+    None
+        The report is printed, not returned.
 
     Raises
     ------
@@ -883,28 +885,34 @@ def check_connection():
     --------
     >>> import plasmasds_utility
     >>> plasmasds_utility.check_connection()  # doctest: +SKIP
-    plasmasds_utility connection check
+    plasmasds_utility 0.1.0 connection check
       server: data@deep.reak.bme.hu, port 72; public data: https://deep.reak.bme.hu/~data
       SSH key: /home/me/.ssh/plasmasds_deep
       data folder: /home/me/.local/share/plasmasds
+      log file: /home/me/.local/state/plasmasds/plasmasds.log
       public data (HTTPS): ok
       private data (SFTP): ok
     """
+    from plasmasds_utility import __version__
+
     _config.start_logging()
     settings = _config.settings()
-    data_dir = _config.env_data_dir() or _config.default_data_dir()
+    env_dir = _config.env_data_dir()
     lines = [
-        "plasmasds_utility connection check",
+        f"plasmasds_utility {__version__} connection check",
         f"  server: {settings['user']}@{settings['host']}, port {settings['port']}; "
         f"public data: {settings['public_url']}",
         "  SSH key: "
         + (settings["ssh_key"] or "none saved (the SSH agent and ~/.ssh/id_* keys)"),
-        f"  data folder: {data_dir}",
+        f"  data folder: {env_dir or _config.default_data_dir()}"
+        + (" (from PLASMASDS_DATA_DIR)" if env_dir else ""),
     ]
     lines += [
         f"  working folder of {prefix}: {path}"
+        + (" (not used: PLASMASDS_DATA_DIR is set)" if env_dir else "")
         for prefix, path in settings["working_dirs"].items()
     ]
+    lines.append(f"  log file: {_config.log_dir() / _config.LOG_FILE}")
     prefix, key = _CONNECTION_TEST
     checks = {
         "public": lambda target: _https.download(
@@ -918,22 +926,23 @@ def check_connection():
             attempts=1,
         ),
     }
-    results = {}
+    _sftp.forget(settings)  # test the connection as it is now
     with tempfile.TemporaryDirectory() as folder:
         for name, fetch in checks.items():
+            way = "HTTPS" if name == "public" else "SFTP"
             target = Path(folder) / name
             try:
                 fetch(target)
                 if target.read_bytes() != _CONNECTION_TEXT:
                     raise TransferError(f"the test file {key!r} has unexpected content")
-                results[name] = None
+                outcome = "ok"
+            except (_https.NotOnServer, _sftp.NotOnServer):
+                outcome = (
+                    f"the server was reached, but the test file {prefix}/{key} is "
+                    "missing on it; tell the server's admins"
+                )
             except PlasmasdsUtilityError as error:
-                results[name] = str(error)
-    for name, way in (("public", "HTTPS"), ("private", "SFTP")):
-        error = results[name]
-        lines.append(
-            f"  {name} data ({way}): " + (f"failed: {error}" if error else "ok")
-        )
+                outcome = f"failed: {error}"
+            lines.append(f"  {name} data ({way}): {outcome}")
     _config.logger.info("\n".join(lines))
     print("\n".join(lines))
-    return results
