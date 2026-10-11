@@ -191,7 +191,8 @@ def test_upload_makes_the_file_known_to_be_on_the_server(server, source):
 def test_missing_source_is_a_path_error(server, tmp_path):
     with pytest.raises(PathError, match="cannot read"):
         upload(tmp_path / "nowhere.h5")
-    assert leftovers(server) == []
+    stub, local = server
+    assert stub.operations == {}  # not even a directory was made
 
 
 @pytest.mark.parametrize("operation", ["mkdir", "write", "chmod"])

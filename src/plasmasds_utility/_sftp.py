@@ -536,20 +536,20 @@ def upload(
                 f"cannot archive {remote} as {archive_to}: {archive_to} is already "
                 "on the server"
             )
-        _make_dirs(sftp, remote.parent)
-        try:
+        try:  # before anything is made on the server
             file = open(source, "rb")  # noqa: SIM115 - closed below
         except OSError as error:
             raise PathError(f"cannot read {source}: {error}") from error
-        left.add(temporary)
-        try:
-            with file:
+        with file:
+            _make_dirs(sftp, remote.parent)
+            left.add(temporary)
+            try:
                 sftp.putfo(file, str(temporary), confirm=True)
-            sftp.chmod(str(temporary), _MODE)
-        except BaseException:
-            if _remove(sftp, temporary):
-                left.discard(temporary)
-            raise
+                sftp.chmod(str(temporary), _MODE)
+            except BaseException:
+                if _remove(sftp, temporary):
+                    left.discard(temporary)
+                raise
         return existed
 
     reported = False  # whether a failure message already accounts for the files
