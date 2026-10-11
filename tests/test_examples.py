@@ -26,7 +26,7 @@ def test_script_runs(home):
         timeout=120,
     )
     assert result.returncode == 0, result.stderr
-    assert "it says: Data access test file" in result.stdout
+    assert "it says: plasmasds_utility connection test" in result.stdout
     assert str(home) in result.stdout  # the data went to the test home
 
 
@@ -41,8 +41,8 @@ def test_notebook_runs(home, monkeypatch):
     notebook = nbformat.read(EXAMPLES / "get_data.ipynb", as_version=4)
     nbclient.NotebookClient(notebook, timeout=120, kernel_name="python3").execute()
     outputs = json.dumps([cell.get("outputs", []) for cell in notebook.cells])
-    assert "Data access test file" in outputs
-    assert "public_test.txt" in outputs
+    assert "plasmasds_utility connection test" in outputs
+    assert "connection_test.txt" in outputs
     assert home.parent.name in outputs  # the kernel used the test home
 
 
