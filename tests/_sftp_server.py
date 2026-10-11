@@ -5,6 +5,12 @@ It accepts one user with one public key, counts connections, stat requests and
 directory listings, and can be told to drop the first connections, to deny access to
 paths (or only opening them), or to report a larger size than a file has (which
 makes a download look truncated).
+
+Uploads are supported like OpenSSH's server does them: writing files, creating
+directories, changing modes, ``rename`` (which refuses an existing target),
+``posix-rename@openssh.com`` (which replaces it), ``hardlink@openssh.com`` and removing
+files. Each of these counts in ``operations``, can be refused with an SFTP status
+through ``refused``, or can drop the connection once through ``drop``.
 """
 
 import collections
@@ -14,6 +20,7 @@ import threading
 
 import paramiko
 from paramiko import SFTPAttributes, SFTPHandle, SFTPServer, SFTPServerInterface
+from paramiko.sftp import CMD_EXTENDED
 
 
 class _Interface(paramiko.ServerInterface):
@@ -36,7 +43,31 @@ class _Interface(paramiko.ServerInterface):
 
 class _Handle(SFTPHandle):
     def stat(self):
-        return SFTPAttributes.from_stat(os.fstat(self.readfile.fileno()))
+        file = getattr(self, "readfile", None) or self.writefile
+        return SFTPAttributes.from_stat(os.fstat(file.fileno()))
+
+
+class _Server(SFTPServer):
+    """paramiko's SFTP server, with OpenSSH's hard-link extension.
+
+    paramiko reads the extension name before it dispatches, so every extension is
+    handled here; other requests go to paramiko.
+    """
+
+    def _process(self, t, request_number, msg):
+        if t != CMD_EXTENDED:
+            return super()._process(t, request_number, msg)
+        tag = msg.get_text()
+        if tag in ("hardlink@openssh.com", "posix-rename@openssh.com"):
+            oldpath = msg.get_text()
+            newpath = msg.get_text()
+            if tag == "hardlink@openssh.com":
+                status = self.server.hardlink(oldpath, newpath)
+            else:
+                status = self.server.posix_rename(oldpath, newpath)
+        else:
+            status = paramiko.SFTP_OP_UNSUPPORTED
+        self._send_status(request_number, status)
 
 
 class _SFTP(SFTPServerInterface):
@@ -46,6 +77,26 @@ class _SFTP(SFTPServerInterface):
 
     def _local(self, path):
         return os.path.join(self.stub.root, path.lstrip("/"))
+
+    def _fault(self, operation):
+        """Count an upload operation; return the status a test asked it to fail with."""
+        self.stub.operations[operation] += 1
+        if operation in self.stub.drop:
+            self.stub.drop.discard(operation)
+            self.stub.drop_connections()
+            return paramiko.SFTP_FAILURE
+        return self.stub.refused.get(operation)
+
+    def _do(self, operation, action, *paths):
+        """Run action on the local paths unless the operation is refused."""
+        status = self._fault(operation)
+        if status is not None:
+            return status
+        try:
+            action(*(self._local(path) for path in paths))
+        except OSError as error:
+            return SFTPServer.convert_errno(error.errno)
+        return paramiko.SFTP_OK
 
     def stat(self, path):
         self.stub.stats[path] += 1
@@ -80,16 +131,50 @@ class _SFTP(SFTPServerInterface):
         return entries
 
     def open(self, path, flags, attr):
-        if path in self.stub.denied or path in self.stub.denied_open:
+        writing = flags & (os.O_WRONLY | os.O_RDWR)
+        if path in self.stub.denied or (not writing and path in self.stub.denied_open):
             return paramiko.SFTP_PERMISSION_DENIED
+        if writing:
+            status = self._fault("write")
+            if status is not None:
+                return status
         try:
-            file = open(self._local(path), "rb")  # noqa: SIM115 - closed by the handle
+            # Closed by the handle.
+            file = open(self._local(path), "wb" if writing else "rb")  # noqa: SIM115
         except OSError as error:
             return SFTPServer.convert_errno(error.errno)
         handle = _Handle(flags)
         handle.filename = self._local(path)
-        handle.readfile = file
+        if writing:
+            handle.writefile = file
+        else:
+            handle.readfile = file
         return handle
+
+    def mkdir(self, path, attr):
+        return self._do("mkdir", os.mkdir, path)
+
+    def chattr(self, path, attr):
+        # The mode is recorded, because Windows can only make a file read-only.
+        self.stub.modes[path] = attr.st_mode
+        return self._do("chmod", lambda local: os.chmod(local, attr.st_mode), path)
+
+    def rename(self, oldpath, newpath):
+        # Like OpenSSH: link, then unlink, so an existing target is refused.
+        def rename(old, new):
+            os.link(old, new)
+            os.unlink(old)
+
+        return self._do("rename", rename, oldpath, newpath)
+
+    def posix_rename(self, oldpath, newpath):
+        return self._do("posix-rename", os.replace, oldpath, newpath)
+
+    def hardlink(self, oldpath, newpath):
+        return self._do("hardlink", os.link, oldpath, newpath)
+
+    def remove(self, path):
+        return self._do("remove", os.remove, path)
 
 
 class StubSFTPServer:
@@ -107,6 +192,10 @@ class StubSFTPServer:
         self.stats = collections.Counter()  # stat requests per path
         self.listings = collections.Counter()  # directory listings per path
         self.extra_size = {}
+        self.operations = collections.Counter()  # upload operations by name
+        self.refused = {}  # upload operation name -> SFTP status to answer with
+        self.drop = set()  # upload operations that close the connection, once
+        self.modes = {}  # path -> the mode a client set
         self._transports = []
         self._socket = socket.socket()
         self._socket.bind(("127.0.0.1", 0))
@@ -127,7 +216,7 @@ class StubSFTPServer:
                 continue
             transport = paramiko.Transport(connection)
             transport.add_server_key(self.host_key)
-            transport.set_subsystem_handler("sftp", SFTPServer, _SFTP, stub=self)
+            transport.set_subsystem_handler("sftp", _Server, _SFTP, stub=self)
             self._transports.append(transport)
             try:
                 transport.start_server(server=_Interface(self))
