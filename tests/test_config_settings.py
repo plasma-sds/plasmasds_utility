@@ -150,6 +150,15 @@ def test_ssh_key_must_be_absolute(config_file):
         _config.settings()
 
 
+@pytest.mark.parametrize(
+    "url", ["deep.reak.bme.hu/~data", "ftp://deep.reak.bme.hu/~data", "https://"]
+)
+def test_public_url_must_be_a_web_address(config_file, url):
+    write_json(config_file, {"public_url": url})
+    with pytest.raises(ConfigError, match="public_url must be a web address"):
+        _config.settings()
+
+
 def test_configured_ssh_key_is_returned(config_file, home):
     key = home / "id_test"
     key.write_text("not a real key", encoding="utf-8")
