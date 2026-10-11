@@ -859,9 +859,11 @@ def check_connection():
     Downloads a small test file that is kept on the server for this, once from
     the public data over HTTPS and once from the private data over SFTP, into a
     temporary folder that is removed afterwards; nothing is written to the data
-    folders. The SFTP check asks the server again even about a file remembered
-    as missing. A report is printed: the settings in use (server, SSH key, data
-    folder) and, for each way of access, "ok" or why it failed.
+    folders. Each way is tried once, so a blocked port shows within the 30-second
+    timeout instead of after retries. The SFTP check asks the server again even
+    about a file remembered as missing. A report is printed to standard output
+    and logged: the settings in use (server, SSH key, data folder) and, for each
+    way of access, "ok" or why it failed.
 
     Returns
     -------
@@ -906,13 +908,14 @@ def check_connection():
     prefix, key = _CONNECTION_TEST
     checks = {
         "public": lambda target: _https.download(
-            _paths.public_url(settings, prefix, key), target
+            _paths.public_url(settings, prefix, key), target, attempts=1
         ),
         "private": lambda target: _sftp.download(
             settings,
             _paths.private_remote(settings, prefix, key),
             target,
             use_cache=False,
+            attempts=1,
         ),
     }
     results = {}

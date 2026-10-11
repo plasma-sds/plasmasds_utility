@@ -49,7 +49,10 @@ def test_both_ways_work(servers, home, capsys):
     assert f"server: data@127.0.0.1, port {sftp.port}" in out
     assert f"SSH key: {sftp.key_file}" in out
     assert f"data folder: {_config.default_data_dir()}" in out
-    assert not _config.default_data_dir().exists()  # nothing written there
+    # No client folder appeared. (On Windows the data folder also holds the
+    # configuration and the log, so the folder itself exists.)
+    assert not (_config.default_data_dir() / client._CONNECTION_TEST[0]).exists()
+    assert list(home.rglob("*.part")) == []
 
 
 def test_report_is_logged(servers, home):
@@ -115,6 +118,17 @@ def test_wrong_host_key_is_reported(servers, home):
     wrong = paramiko.RSAKey.generate(1024)
     configure(host_keys=[f"{wrong.get_name()} {wrong.get_base64()}"])
     assert "does not match" in plasmasds_utility.check_connection()["private"]
+
+
+def test_each_way_is_tried_once(servers, home):
+    sftp, http, configure = servers
+    http.serve(PATH, {"body": b"", "status": 500})
+    sftp.fail_connections = 1
+    result = plasmasds_utility.check_connection()
+    assert "after 1 attempts" in result["public"]
+    assert "after 1 attempts" in result["private"]
+    assert http.requests[PATH] == 1
+    assert sftp.connections == 1
 
 
 def test_invalid_configuration_raises(home):
