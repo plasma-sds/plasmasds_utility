@@ -26,7 +26,7 @@ Issues = "https://github.com/plasma-sds/plasmasds_utility/issues"
 path = "src/plasmasds_utility/__init__.py"
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "tests", "README.md", "LICENSE"]
+include = ["src", "tests", "examples", "README.md", "LICENSE"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
