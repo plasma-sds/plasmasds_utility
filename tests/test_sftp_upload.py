@@ -1,10 +1,12 @@
 import io
+import types
+from pathlib import Path, PurePosixPath
 
 import paramiko
 import pytest
 from paramiko.sftp import CMD_EXTENDED
 
-from plasmasds_utility import _config, _sftp
+from plasmasds_utility import PathError, TransferError, _config, _sftp
 
 
 @pytest.fixture
@@ -78,3 +80,223 @@ def test_server_refuses_and_drops_on_request(raw, sftp_server):
         sftp.remove("a")
     assert sftp_server.drop == set()
     assert (root / "a").exists()
+
+
+# Uploads.
+
+REMOTE = PurePosixPath("private_html/renate-od/a/x.h5")
+ARCHIVE = PurePosixPath("private_html/renate-od/archive/1.0/a/x.h5")
+FAILED = (paramiko.SFTP_FAILURE, paramiko.SFTP_PERMISSION_DENIED)
+
+
+@pytest.fixture
+def sleeps(monkeypatch):
+    """Record the backoff waits instead of sleeping."""
+    calls = []
+    monkeypatch.setattr(_sftp, "time", types.SimpleNamespace(sleep=calls.append))
+    return calls
+
+
+@pytest.fixture
+def source(tmp_path):
+    path = tmp_path / "local" / "x.h5"
+    path.parent.mkdir()
+    path.write_bytes(b"new data")
+    return path
+
+
+@pytest.fixture
+def server(sftp_server, tmp_path):
+    """The test server, and a function giving the local path of a server path."""
+    root = tmp_path / "server"
+    return sftp_server, lambda remote: root.joinpath(*remote.parts)
+
+
+@pytest.fixture
+def existing(server):
+    """REMOTE on the server, with old content."""
+    stub, local = server
+    local(REMOTE).parent.mkdir(parents=True)
+    local(REMOTE).write_bytes(b"old data")
+    return server
+
+
+def upload(source, **kwargs):
+    return _sftp.upload(_config.settings(), source, REMOTE, **kwargs)
+
+
+def leftovers(server):
+    stub, local = server
+    return sorted(p.name for p in Path(stub.root).rglob("*.part"))
+
+
+def test_upload_creates_directories_and_the_file(server, source, sleeps):
+    stub, local = server
+    mtime = upload(source)
+    assert local(REMOTE).read_bytes() == b"new data"
+    assert mtime == int(local(REMOTE).stat().st_mtime)  # SFTP sends whole seconds
+    assert list(stub.modes.values()) == [0o644]
+    assert stub.operations["mkdir"] == 3  # private_html, renate-od, a
+    assert stub.operations["rename"] == 1
+    assert leftovers(server) == []
+    assert sleeps == []
+
+
+def test_upload_never_replaces_a_file_without_archiving(existing, source):
+    stub, local = existing
+    with pytest.raises(TransferError, match="already on the server.*archive_to"):
+        upload(source)
+    assert local(REMOTE).read_bytes() == b"old data"
+    assert stub.operations["write"] == 0
+
+
+def test_upload_archives_the_old_file_by_a_hard_link(existing, source):
+    stub, local = existing
+    upload(source, archive_to=ARCHIVE)
+    assert local(REMOTE).read_bytes() == b"new data"
+    assert local(ARCHIVE).read_bytes() == b"old data"
+    assert stub.operations["hardlink"] == 1
+    assert stub.operations["posix-rename"] == 1
+    assert leftovers(existing) == []
+
+
+def test_upload_refuses_an_existing_archive_name(existing, source):
+    stub, local = existing
+    local(ARCHIVE).parent.mkdir(parents=True)
+    local(ARCHIVE).write_bytes(b"older data")
+    with pytest.raises(TransferError, match=f"{ARCHIVE} is already on the server"):
+        upload(source, archive_to=ARCHIVE)
+    assert local(ARCHIVE).read_bytes() == b"older data"
+    assert local(REMOTE).read_bytes() == b"old data"
+    assert stub.operations["write"] == 0
+
+
+def test_upload_with_nothing_to_archive_warns(server, source, caplog):
+    stub, local = server
+    upload(source, archive_to=ARCHIVE)
+    assert local(REMOTE).read_bytes() == b"new data"
+    assert not local(ARCHIVE).exists()
+    assert "nothing to archive" in caplog.text
+    assert stub.operations["hardlink"] == 0
+
+
+def test_upload_makes_the_file_known_to_be_on_the_server(server, source):
+    settings = _config.settings()
+    with pytest.raises(_sftp.NotOnServer):
+        _sftp.stat(settings, REMOTE)
+    upload(source)
+    assert _sftp.stat(settings, REMOTE)[0] == len(b"new data")
+
+
+def test_missing_source_is_a_path_error(server, tmp_path):
+    with pytest.raises(PathError, match="cannot read"):
+        upload(tmp_path / "nowhere.h5")
+    assert leftovers(server) == []
+
+
+@pytest.mark.parametrize("operation", ["mkdir", "write", "chmod"])
+def test_denied_upload_is_not_retried(server, source, sleeps, operation):
+    stub, local = server
+    stub.refused[operation] = paramiko.SFTP_PERMISSION_DENIED
+    with pytest.raises(TransferError, match="cannot upload .* denied"):
+        upload(source)
+    assert stub.operations[operation] == 1
+    assert sleeps == []
+    assert leftovers(server) == []
+    assert not local(REMOTE).exists()
+
+
+def test_failing_upload_is_retried_then_reported(server, source, sleeps):
+    stub, local = server
+    stub.refused["chmod"] = paramiko.SFTP_FAILURE
+    with pytest.raises(TransferError, match="cannot upload .* after 3 attempts"):
+        upload(source)
+    assert stub.operations["write"] == 3
+    assert sleeps == [1.0, 2.0]
+    assert leftovers(server) == []  # removed after each attempt
+
+
+@pytest.mark.parametrize("operation", ["write", "chmod"])
+def test_dropped_upload_is_retried_and_cleaned_up(server, source, sleeps, operation):
+    stub, local = server
+    stub.drop.add(operation)
+    upload(source)
+    assert local(REMOTE).read_bytes() == b"new data"
+    assert stub.operations["write"] == 2
+    assert leftovers(server) == []  # the first attempt's file, removed by the second
+
+
+def test_temporary_file_left_by_a_lost_connection_is_named(server, source, sleeps):
+    stub, local = server
+    stub.drop.add("chmod")
+    with pytest.raises(TransferError, match=r"\.x\.h5\.\w+\.part may be left"):
+        upload(source, attempts=1)
+    assert len(leftovers(server)) == 1
+
+
+def test_server_without_hard_links_is_reported(existing, source, sleeps):
+    stub, local = existing
+    stub.refused["hardlink"] = paramiko.SFTP_OP_UNSUPPORTED
+    with pytest.raises(TransferError, match="does not support hard links") as error:
+        upload(source, archive_to=ARCHIVE)
+    assert "appear" not in str(error.value)
+    assert "server file is unchanged, and the temporary file was removed" in str(
+        error.value
+    )
+    assert local(REMOTE).read_bytes() == b"old data"
+    assert leftovers(existing) == []
+    assert stub.operations["hardlink"] == 1  # not retried
+
+
+def test_failed_hard_link_says_where(existing, source, sleeps):
+    stub, local = existing
+    stub.refused["hardlink"] = paramiko.SFTP_FAILURE
+    with pytest.raises(TransferError, match=f"archiving the old .* as {ARCHIVE}"):
+        upload(source, archive_to=ARCHIVE)
+    assert local(REMOTE).read_bytes() == b"old data"
+    assert leftovers(existing) == []
+
+
+def test_failed_replace_removes_the_archive_name(existing, source, sleeps):
+    stub, local = existing
+    stub.refused["posix-rename"] = paramiko.SFTP_FAILURE
+    with pytest.raises(TransferError, match="but replacing .* failed") as error:
+        upload(source, archive_to=ARCHIVE)
+    assert "temporary file was removed" in str(error.value)
+    assert local(REMOTE).read_bytes() == b"old data"
+    assert not local(ARCHIVE).exists()
+    assert leftovers(existing) == []
+    assert stub.operations["posix-rename"] == 1  # not retried
+
+
+def test_file_appearing_during_the_upload_is_not_replaced(server, source, sleeps):
+    stub, local = server
+    stub.refused["rename"] = paramiko.SFTP_FAILURE  # as OpenSSH answers then
+    with pytest.raises(TransferError, match="appear on the server meanwhile"):
+        upload(source)
+    assert leftovers(server) == []
+    assert stub.operations["rename"] == 1
+
+
+def test_lost_connection_while_replacing_leaves_the_files(existing, source, sleeps):
+    stub, local = existing
+    stub.drop.add("posix-rename")
+    with pytest.raises(TransferError, match="may be left on the server"):
+        upload(source, archive_to=ARCHIVE)
+    assert local(REMOTE).read_bytes() == b"old data"
+    assert local(ARCHIVE).read_bytes() == b"old data"  # kept: it may be the only copy
+    assert len(leftovers(existing)) == 1
+
+
+def test_unreadable_upload_time_only_warns(server, source, monkeypatch, caplog):
+    stub, local = server
+    rename = paramiko.SFTPClient.rename
+
+    def rename_then_deny(sftp, old, new):
+        rename(sftp, old, new)
+        stub.denied.add(new)
+
+    monkeypatch.setattr(paramiko.SFTPClient, "rename", rename_then_deny)
+    assert upload(source) is None
+    assert local(REMOTE).read_bytes() == b"new data"
+    assert "cannot read its modification time" in caplog.text
