@@ -113,3 +113,13 @@ def test_invalid_keys_are_refused_before_connecting(server, key, archive_to, mes
     with pytest.raises(PathError, match=message):
         client.upload(key, archive_to=archive_to)
     assert stub.connections == 0
+
+
+@pytest.mark.parametrize("private", [None, 0, "yes"])
+def test_private_must_be_true_or_false(server, private):
+    stub, root = server
+    client = DataClient("renate-od")
+    place(client.local_path("a.h5", private=False), b"open")
+    with pytest.raises(ValueError, match="private must be True or False"):
+        client.upload("a.h5", private=private)
+    assert stub.connections == 0

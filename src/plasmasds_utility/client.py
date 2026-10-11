@@ -634,7 +634,8 @@ class DataClient:
             The data key (see :meth:`local_path`).
         private : bool, default True
             True to upload the local private copy to the private server tree,
-            False the local public copy to the public tree.
+            False the local public copy to the public tree. Unlike for
+            :meth:`get`, None is not accepted.
         archive_to : str, optional
             The key under which to keep the file currently on the server, in the
             same tree. Nothing may be there yet.
@@ -645,6 +646,8 @@ class DataClient:
 
         Raises
         ------
+        ValueError
+            If ``private`` is not True or False.
         PathError
             If ``key`` or ``archive_to`` is invalid, they are the same key, or the
             local copy is missing or cannot be read.
@@ -669,6 +672,8 @@ class DataClient:
         ...     archive_to="test_dataset/crm_systemtests/archive/1.3.1/case1.h5",
         ... )  # doctest: +SKIP
         """
+        if not isinstance(private, bool):
+            raise ValueError(f"private must be True or False, got {private!r}")
         _paths.check_key(key)
         if archive_to is not None:
             _paths.check_key(archive_to)
