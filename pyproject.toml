@@ -57,6 +57,9 @@ plasmasds_utility = { path = ".", editable = true }
 
 [tool.pixi.feature.test.dependencies]
 pytest = ">=8"
+# To run the example notebook in the tests; not dependencies of the package.
+nbclient = ">=0.10"
+ipykernel = ">=6"
 
 [tool.pixi.feature.test.tasks]
 test = "pytest"
