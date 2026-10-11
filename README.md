@@ -117,14 +117,16 @@ data.upload(
 Each client package chooses its own archive layout.
 Nothing may be at `archive_to` yet; if there is no file to archive, the upload goes ahead with a warning.
 The old file is not copied: it gets a second name on the server (a hard link), so archiving costs no space or time.
+Do not upload the same key from two places at once: the server has no locks, so one of two simultaneous replacements can be lost.
 
 The file is uploaded to a temporary name next to its target (`.<name>.<random>.part`) and renamed into place only when complete, so people downloading it get either the complete old or the complete new file.
-If a step fails, the message says which one, and the file on the server is unchanged.
+If a step fails, the message says which one, whether the file on the server is unchanged, and what may be left behind; a source file that changes during the upload is refused.
 Uploaded files are readable by everyone on the server (mode 0644, directories 0755), which public data needs to be served over HTTPS.
 The local copy is given the server's modification time, the time of the upload: `get(key, update="if_newer")` does not download your own upload again, while other users' copies are older and are updated by `update="if_newer"` or `check_updates()`.
 
 **For whoever manages the server:** the utility never deletes files on the server.
-A `.part` file left behind by a lost connection (the error message names it) can be deleted by hand.
+A `.part` file left behind by a failed or interrupted upload (the message names it) can be deleted by hand; in the public tree it can also be downloaded until then.
+An archive name that a failed upload says may be left is a second name of the live file if both have the same content: delete it, never write over it in place, because writing over one name changes both.
 
 ## Where files go
 

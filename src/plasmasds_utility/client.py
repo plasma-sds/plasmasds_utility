@@ -621,7 +621,9 @@ class DataClient:
         ``archive/<version>/<key>``; use a folder it reserves for archives. If
         nothing is at ``key`` yet, the file is uploaded with a warning that there
         was nothing to archive. People reading the file from the server see the
-        complete old or the complete new file, never a partial one.
+        complete old or the complete new file, never a partial one. Do not upload
+        the same key from two places at once: one of two simultaneous
+        replacements can be lost.
 
         The uploaded file is readable by everyone on the server (mode 0644), which
         public data needs to be downloadable over HTTPS. Its modification time on
@@ -650,14 +652,16 @@ class DataClient:
             If ``private`` is not True or False.
         PathError
             If ``key`` or ``archive_to`` is invalid, they are the same key, or the
-            local copy is missing or cannot be read.
+            local copy is missing, cannot be read, or changes during the upload.
         TransferError
             If the file is on the server and ``archive_to`` is not given, something
-            is at ``archive_to`` already, the server refuses a step, or the upload
-            fails after the retries. The message says which step failed; the file
-            on the server is then unchanged.
+            is at ``archive_to`` already, a folder is at ``key``, the server refuses
+            a step, or the upload fails after the retries. The message says which
+            step failed, whether the file on the server is unchanged, and what may
+            be left on the server.
         AuthError
-            If private data is not available to you (see :meth:`get`).
+            If you have no SSH access to the server (see :meth:`get`); uploads of
+            public data need it too.
         ConfigError
             As for :meth:`get`.
 

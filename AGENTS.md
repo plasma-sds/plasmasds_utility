@@ -36,6 +36,7 @@ Decisions already made (do not re-open them without an owner):
 - Re-downloads triggered by a failed verification are bounded; they never loop.
 - Uploads never lose data on the server: a file there is replaced only when the caller names a key to keep the old one under (`archive_to`, a hard link on the server), and the client owns its archive layout.
   There is no overwrite flag, and the utility never deletes files on the server.
+  Without server-side locks this holds for one upload of a key at a time; simultaneous uploads of the same key are documented as unsupported.
   (Decided 2026-10-11 on #16.)
 - Failures are loud and specific: package-specific exception classes, messages that say where the failure happened, and a rotating log file.
 
