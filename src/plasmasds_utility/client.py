@@ -4,6 +4,7 @@ import atexit
 import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 from plasmasds_utility import _config, _https, _paths, _sftp
@@ -11,6 +12,7 @@ from plasmasds_utility.exceptions import (
     AuthError,
     ConfigError,
     PathError,
+    PlasmasdsUtilityError,
     TransferError,
 )
 
@@ -843,3 +845,92 @@ def set_ssh_key(path):
     _sftp.close_all()  # use the new key at once, not a remembered failure
     _config.logger.info("SSH key set to %s", key)
     return key
+
+
+# A small file kept on the server in both trees for check_connection(); its
+# content never changes.
+_CONNECTION_TEST = ("plasmasds_utility", "test/connection_test.txt")
+_CONNECTION_TEXT = b"plasmasds_utility connection test\n"
+
+
+def check_connection():
+    """Check that the data server can be reached, over HTTPS and over SFTP.
+
+    Downloads a small test file that is kept on the server for this, once from
+    the public data over HTTPS and once from the private data over SFTP, into a
+    temporary folder that is removed afterwards; nothing is written to the data
+    folders. The SFTP check asks the server again even about a file remembered
+    as missing. A report is printed: the settings in use (server, SSH key, data
+    folder) and, for each way of access, "ok" or why it failed.
+
+    Returns
+    -------
+    dict
+        ``{"public": error, "private": error}``, where ``error`` is None if the
+        test file was downloaded and correct, else the error message.
+
+    Raises
+    ------
+    ConfigError
+        If the user configuration file is invalid, ``PLASMASDS_DATA_DIR`` is a
+        relative path, or the log directory cannot be created. Failures of the
+        connections themselves, including a missing SSH key, are reported, not
+        raised.
+
+    Examples
+    --------
+    >>> import plasmasds_utility
+    >>> plasmasds_utility.check_connection()  # doctest: +SKIP
+    plasmasds_utility connection check
+      server: data@deep.reak.bme.hu, port 72; public data: https://deep.reak.bme.hu/~data
+      SSH key: /home/me/.ssh/plasmasds_deep
+      data folder: /home/me/.local/share/plasmasds
+      public data (HTTPS): ok
+      private data (SFTP): ok
+    """
+    _config.start_logging()
+    settings = _config.settings()
+    data_dir = _config.env_data_dir() or _config.default_data_dir()
+    lines = [
+        "plasmasds_utility connection check",
+        f"  server: {settings['user']}@{settings['host']}, port {settings['port']}; "
+        f"public data: {settings['public_url']}",
+        "  SSH key: "
+        + (settings["ssh_key"] or "none saved (the SSH agent and ~/.ssh/id_* keys)"),
+        f"  data folder: {data_dir}",
+    ]
+    lines += [
+        f"  working folder of {prefix}: {path}"
+        for prefix, path in settings["working_dirs"].items()
+    ]
+    prefix, key = _CONNECTION_TEST
+    checks = {
+        "public": lambda target: _https.download(
+            _paths.public_url(settings, prefix, key), target
+        ),
+        "private": lambda target: _sftp.download(
+            settings,
+            _paths.private_remote(settings, prefix, key),
+            target,
+            use_cache=False,
+        ),
+    }
+    results = {}
+    with tempfile.TemporaryDirectory() as folder:
+        for name, fetch in checks.items():
+            target = Path(folder) / name
+            try:
+                fetch(target)
+                if target.read_bytes() != _CONNECTION_TEXT:
+                    raise TransferError(f"the test file {key!r} has unexpected content")
+                results[name] = None
+            except PlasmasdsUtilityError as error:
+                results[name] = str(error)
+    for name, way in (("public", "HTTPS"), ("private", "SFTP")):
+        error = results[name]
+        lines.append(
+            f"  {name} data ({way}): " + (f"failed: {error}" if error else "ok")
+        )
+    _config.logger.info("\n".join(lines))
+    print("\n".join(lines))
+    return results

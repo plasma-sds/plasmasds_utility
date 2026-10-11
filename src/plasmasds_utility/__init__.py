@@ -3,7 +3,12 @@
 The package is under development; see issue #6 for the design.
 """
 
-from plasmasds_utility.client import DataClient, set_ssh_key, show_public_fallbacks
+from plasmasds_utility.client import (
+    DataClient,
+    check_connection,
+    set_ssh_key,
+    show_public_fallbacks,
+)
 from plasmasds_utility.exceptions import (
     AuthError,
     ConfigError,
@@ -22,6 +27,7 @@ __all__ = [
     "PlasmasdsUtilityError",
     "TransferError",
     "__version__",
+    "check_connection",
     "set_ssh_key",
     "show_public_fallbacks",
 ]
