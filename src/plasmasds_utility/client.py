@@ -207,7 +207,7 @@ def _kept(path, error, force):
     An AuthError stays an AuthError, so callers catching it still do.
     """
     cls = AuthError if isinstance(error, AuthError) else TransferError
-    if isinstance(error, (_sftp.NotOnServer, _https.NotOnServer)):
+    if isinstance(error, (_sftp.NotOnServerError, _https.NotOnServerError)):
         return cls(f"kept the local copy {path}: {error}")
     failed = "could not be downloaded again" if force else "could not be checked"
     return cls(f"kept the local copy {path}, but the server copy {failed}: {error}")
@@ -549,7 +549,7 @@ class DataClient:
                     return _sftp.download(
                         settings, remote, private_path, use_cache=not refresh
                     )
-                except (AuthError, _sftp.NotOnServer) as error:
+                except (AuthError, _sftp.NotOnServerError) as error:
                     if private:
                         raise
                     reason = error
@@ -665,7 +665,7 @@ class DataClient:
                 if _refresh_public(url, path, False):
                     updated.append(path)
                     _config.logger.info("updated %s", path)
-            except _https.NotOnServer as error:
+            except _https.NotOnServerError as error:
                 missing.append(path)
                 _config.logger.warning("kept %s: %s", path, error)
             except (TransferError, PathError) as error:
@@ -730,7 +730,7 @@ class DataClient:
         for remote_dir, entries in by_dir.items():
             try:
                 listing = _sftp.listdir(settings, remote_dir)
-            except _sftp.NotOnServer:
+            except _sftp.NotOnServerError:
                 listing = {}
             except AuthError:
                 raise
@@ -921,7 +921,7 @@ class DataClient:
             )
         try:
             _https.head(_paths.public_url(settings, self.prefix, key))
-        except _https.NotOnServer:
+        except _https.NotOnServerError:
             return False
         return True
 
@@ -1163,7 +1163,7 @@ def check_connection():
                 if target.read_bytes() != _CONNECTION_TEXT:
                     raise TransferError(f"the test file {key!r} has unexpected content")
                 outcome = "ok"
-            except (_https.NotOnServer, _sftp.NotOnServer):
+            except (_https.NotOnServerError, _sftp.NotOnServerError):
                 outcome = (
                     f"the server was reached, but the test file {prefix}/{key} is "
                     "missing on it; tell the server's admins"

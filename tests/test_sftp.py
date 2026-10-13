@@ -492,7 +492,7 @@ def test_stat_reuses_the_session(served, home):
 def test_stat_of_a_missing_file_is_remembered(sftp_server, sleeps):
     settings = _config.settings()
     for _ in range(2):
-        with pytest.raises(_sftp.NotOnServer):
+        with pytest.raises(_sftp.NotOnServerError):
             _sftp.stat(settings, REMOTE)
     assert sftp_server.stats[str(REMOTE)] == 1
     assert sleeps == []
@@ -500,13 +500,13 @@ def test_stat_of_a_missing_file_is_remembered(sftp_server, sleeps):
 
 def test_explicit_check_bypasses_the_missing_file_memory(sftp_server, tmp_path, home):
     settings = _config.settings()
-    with pytest.raises(_sftp.NotOnServer):
+    with pytest.raises(_sftp.NotOnServerError):
         _sftp.stat(settings, REMOTE)
     # The file is uploaded during the session.
     path = tmp_path / "server" / Path(*REMOTE.parts)
     path.parent.mkdir(parents=True)
     path.write_bytes(b"new")
-    with pytest.raises(_sftp.NotOnServer):
+    with pytest.raises(_sftp.NotOnServerError):
         _sftp.stat(settings, REMOTE)  # still remembered
     assert _sftp.stat(settings, REMOTE, use_cache=False)[0] == 3
     _sftp.stat(settings, REMOTE)  # found again, so no longer remembered as missing
@@ -515,7 +515,7 @@ def test_explicit_check_bypasses_the_missing_file_memory(sftp_server, tmp_path, 
 
 
 def test_download_can_bypass_the_missing_file_memory(sftp_server, tmp_path, home):
-    with pytest.raises(_sftp.NotOnServer):
+    with pytest.raises(_sftp.NotOnServerError):
         download(home / "x.h5")
     path = tmp_path / "server" / Path(*REMOTE.parts)
     path.parent.mkdir(parents=True)
@@ -537,7 +537,7 @@ def test_listdir_returns_sizes_and_mtimes(served):
 
 
 def test_listdir_of_a_missing_directory(sftp_server, sleeps):
-    with pytest.raises(_sftp.NotOnServer):
+    with pytest.raises(_sftp.NotOnServerError):
         _sftp.listdir(_config.settings(), REMOTE.parent)
     assert sleeps == []
 

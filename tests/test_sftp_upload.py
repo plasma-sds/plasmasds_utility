@@ -199,7 +199,7 @@ def test_upload_with_nothing_to_archive_warns(server, source, caplog):
 
 def test_upload_makes_the_file_known_to_be_on_the_server(server, source):
     settings = _config.settings()
-    with pytest.raises(_sftp.NotOnServer):
+    with pytest.raises(_sftp.NotOnServerError):
         _sftp.stat(settings, REMOTE)
     upload(source)
     assert _sftp.stat(settings, REMOTE)[0] == len(b"new data")
