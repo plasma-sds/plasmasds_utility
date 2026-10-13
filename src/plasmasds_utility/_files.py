@@ -7,7 +7,7 @@ write never leaves a partial file under the target name.
 import contextlib
 import logging
 import os
-import tempfile
+import secrets
 
 from plasmasds_utility.exceptions import PathError
 
@@ -67,12 +67,30 @@ class _LocalFile:
         return self._file.tell()
 
 
+def _create(target):
+    """Create a new, empty temporary file next to target; return (fd, path).
+
+    Created with mode ``0o666`` like any new file, so the umask and a default
+    ACL of the folder apply as usual (``tempfile`` would force ``0o600``, which
+    a shared group folder cannot read, #25). A name already taken is retried.
+    """
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0)
+    for _ in range(100):
+        path = target.parent / f".{target.name}.{secrets.token_hex(4)}.part"
+        try:
+            return os.open(path, flags, 0o666), path
+        except FileExistsError:
+            continue
+    raise FileExistsError(f"no free temporary name next to {target}")
+
+
 @contextlib.contextmanager
 def writing(target):
     """Write target atomically.
 
     Yields an object whose ``file`` is a binary file opened in the target's
-    directory, under a unique ``.part`` name. When the block ends normally the file
+    directory, under a unique ``.part`` name, with the permissions any new file
+    of the user gets there (see :func:`_create`). When the block ends normally the file
     is closed, given the timestamp in ``mtime`` if one was set, and moved over
     target with :func:`os.replace`. If the block raises, the temporary file is
     removed and an existing target is left unchanged.
@@ -99,9 +117,7 @@ def writing(target):
         If the file cannot be created, written or moved into place.
     """
     try:
-        fd, temporary = tempfile.mkstemp(
-            dir=target.parent, prefix=f".{target.name}.", suffix=".part"
-        )
+        fd, temporary = _create(target)
     except OSError as error:
         raise _local_error(target, error) from error
     try:

@@ -1,5 +1,7 @@
 import logging
+import os
 import socket
+import stat
 import time
 import types
 
@@ -32,6 +34,18 @@ def test_download_writes_the_file_with_the_server_mtime(http_server, home, sleep
     assert http_server.requests["/a.txt"] == 1
     assert leftovers(home) == []
     assert sleeps == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="no POSIX permissions")
+def test_downloaded_file_is_readable_by_others(http_server, home):
+    # For shared group data folders (#25): like a file the user creates.
+    http_server.serve("/a.txt", {"body": b"hello"})
+    previous = os.umask(0o022)
+    try:
+        target = _https.download(http_server.url("/a.txt"), home / "a.txt")
+    finally:
+        os.umask(previous)
+    assert stat.S_IMODE(target.stat().st_mode) == 0o644
 
 
 def test_large_download_logs_progress(http_server, home, monkeypatch, caplog, capsys):
@@ -216,7 +230,7 @@ def test_local_write_failure_is_a_path_error_not_retried(
     def refuse(*args, **kwargs):
         raise OSError(28, "No space left on device")
 
-    monkeypatch.setattr(_files.tempfile, "mkstemp", refuse)
+    monkeypatch.setattr(_files, "_create", refuse)
     with pytest.raises(PathError, match="No space left on device"):
         _https.download(http_server.url("/a.txt"), home / "a.txt")
     assert sleeps == []
