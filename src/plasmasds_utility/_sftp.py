@@ -322,6 +322,12 @@ def _run(settings, remote, action, verb, *, timeout, attempts, backoff, use_cach
     """
     if attempts < 1:
         raise ValueError(f"attempts must be at least 1, got {attempts}")
+    if _config.server_access() != "all":
+        # Not remembered in _unavailable: the environment may change.
+        raise AuthError(
+            f"not contacting the private server for {remote}: "
+            f"{_config.server_access_note()}"
+        )
     server = _server(settings)
     for attempt in range(1, attempts + 1):
         with _lock:

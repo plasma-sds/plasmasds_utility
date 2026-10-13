@@ -41,6 +41,7 @@ def check(capsys):
     return out, {
         line.split(": ", 1)[0].strip(): line.split(": ", 1)[1]
         for line in out.splitlines()[1:]
+        if ": " in line  # not the server access line
     }
 
 

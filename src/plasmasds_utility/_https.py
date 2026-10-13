@@ -10,7 +10,7 @@ import time
 import urllib.error
 import urllib.request
 
-from plasmasds_utility import _files
+from plasmasds_utility import _config, _files
 from plasmasds_utility._config import logger
 from plasmasds_utility.exceptions import TransferError
 
@@ -131,6 +131,11 @@ def _run(url, action, verb, attempts, backoff):
     """
     if attempts < 1:
         raise ValueError(f"attempts must be at least 1, got {attempts}")
+    if _config.server_access() == "local":
+        raise TransferError(
+            f"not contacting the public server for {url}: "
+            f"{_config.server_access_note()}"
+        )
     if not url.startswith("https://"):
         logger.warning("using an unencrypted connection for %s", url)
     for attempt in range(1, attempts + 1):
