@@ -1153,27 +1153,69 @@ def test_local_files_follow_linked_folders(tmp_path):
 
 
 @no_symlinks
-def test_local_files_survive_a_link_loop(tmp_path):
+def test_local_files_survive_link_loops_and_links_above(tmp_path, caplog):
     tree = tmp_path / "private"
     place(tree / "a" / "f.h5", b"f")
+    place(tree / "c" / "g.h5", b"g")
     place(tmp_path / "public" / "p.h5", b"p")  # beside the tree, not in it
     (tree / "a" / "back").symlink_to(tree / "a", target_is_directory=True)
     (tree / "up").symlink_to(tree, target_is_directory=True)
+    (tree / "a" / "to_c").symlink_to("../c", target_is_directory=True)
+    (tree / "c" / "to_a").symlink_to("../a", target_is_directory=True)
     (tree / "above").symlink_to(tmp_path, target_is_directory=True)
     keys = [key for _, key in client_module._local_files(tree)]
-    assert keys == ["a/f.h5"]
+    assert keys == ["a/f.h5", "c/g.h5"]
+    assert "skipping the linked folder" in caplog.text  # above: contains the tree
 
 
 @no_symlinks
-def test_local_files_walk_two_links_to_one_folder(tmp_path):
+def test_local_files_walk_each_folder_once(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="plasmasds_utility")
     tree = tmp_path / "private"
     elsewhere = tmp_path / "shared"
     place(elsewhere / "f.h5", b"f")
-    (tree / "one").parent.mkdir(parents=True, exist_ok=True)
+    tree.mkdir()
     (tree / "one").symlink_to(elsewhere, target_is_directory=True)
     (tree / "two").symlink_to(elsewhere, target_is_directory=True)
     keys = [key for _, key in client_module._local_files(tree)]
-    assert keys == ["one/f.h5", "two/f.h5"]
+    assert keys == ["one/f.h5"]
+    assert "not checking" in caplog.text
+
+
+@no_symlinks
+def test_local_files_keep_the_plain_key(tmp_path):
+    tree = tmp_path / "private"
+    place(tree / "b" / "deep" / "x.h5", b"x")
+    (tree / "a").mkdir()
+    (tree / "a" / "link").symlink_to(tree / "b" / "deep", target_is_directory=True)
+    keys = [key for _, key in client_module._local_files(tree)]
+    assert keys == ["b/deep/x.h5"]
+
+
+@no_symlinks
+def test_local_files_do_not_multiply_through_cross_links(tmp_path):
+    tree = tmp_path / "private"
+    names = [f"f{n}" for n in range(5)]
+    for name in names:
+        place(tree / name / "x.h5", b"x")
+    for name in names:
+        for other in names:
+            if other != name:
+                (tree / name / other).symlink_to(
+                    f"../{other}", target_is_directory=True
+                )
+    keys = [key for _, key in client_module._local_files(tree)]
+    assert keys == [f"{name}/x.h5" for name in names]
+
+
+@no_symlinks
+def test_local_files_report_broken_links(tmp_path, caplog):
+    tree = tmp_path / "private"
+    place(tree / "a.h5", b"a")
+    (tree / "unmounted").symlink_to(tmp_path / "gone", target_is_directory=True)
+    keys = [key for _, key in client_module._local_files(tree)]
+    assert keys == ["a.h5"]
+    assert "a broken link" in caplog.text
 
 
 @no_symlinks
