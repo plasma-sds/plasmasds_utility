@@ -82,7 +82,7 @@ def show_public_fallbacks():
 @atexit.register
 def _summary_at_exit():
     if _fallbacks:
-        print(f"plasmasds_utility: {_fallback_summary()}", file=sys.stderr)
+        _config.notice(_fallback_summary())
 
 
 _noticed = False  # whether the unchecked-local-data notice was given
@@ -94,8 +94,9 @@ _UPDATE_CHOICES = ("never", "if_newer", "force")
 def _explain_update():
     """Print once per process what get() does with local copies, and the options.
 
-    A notice, not a warning: it is printed to stderr like the exit summary and
-    logged at INFO, so that warnings keep meaning that something went wrong.
+    A notice, not a warning (see :func:`_config.notice`): logged at INFO, and
+    printed to stderr unless ``PLASMASDS_QUIET`` is set, so that warnings keep
+    meaning that something went wrong.
     """
     global _noticed
     if _noticed:
@@ -120,8 +121,7 @@ def _explain_update():
             " Here, though, no server is contacted, so a file not on disk raises an "
             f'error and update must stay "never": {_config.server_access_note()}.'
         )
-    _config.logger.info(text)
-    print(f"plasmasds_utility: {text}", file=sys.stderr)
+    _config.notice(text)
 
 
 # Seconds by which the server time must exceed the local time to count as newer:

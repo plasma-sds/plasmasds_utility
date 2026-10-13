@@ -31,6 +31,7 @@ The packaged ``working_dirs`` is always empty; it is there so that the user's
 import json
 import logging
 import os
+import sys
 import tomllib
 from importlib import resources
 from logging.handlers import RotatingFileHandler
@@ -128,9 +129,34 @@ def env_data_dir():
 SERVER_ACCESS = ("all", "public", "local")
 
 
+def _flag(name):
+    """Return whether an environment variable is set to anything but 0 or false."""
+    return os.environ.get(name, "").strip().lower() not in ("", "0", "false")
+
+
 def _ci():
     """Return whether this runs in CI (``CI`` set, as in GitHub Actions, GitLab)."""
-    return os.environ.get("CI", "").lower() not in ("", "0", "false")
+    return _flag("CI")
+
+
+def quiet():
+    """Return whether notices go to the log only (``PLASMASDS_QUIET`` is set).
+
+    Read on every call; any value but empty, ``0`` or ``false`` counts.
+    """
+    return _flag("PLASMASDS_QUIET")
+
+
+def notice(text):
+    """Log a notice at INFO and print it to stderr, unless :func:`quiet`.
+
+    For messages that inform rather than warn (the first-get notice, the
+    public-fallback summary at exit, the progress of large transfers);
+    warnings and errors are always printed.
+    """
+    logger.info(text)
+    if not quiet():
+        print(f"plasmasds_utility: {text}", file=sys.stderr, flush=True)
 
 
 def server_access():

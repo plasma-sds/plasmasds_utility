@@ -110,6 +110,7 @@ ENV_VARIABLES = (
     "XDG_STATE_HOME",
     "PLASMASDS_DATA_DIR",
     "PLASMASDS_SERVER_ACCESS",
+    "PLASMASDS_QUIET",
     "CI",  # set in GitHub Actions, where it would make server access public
     "SSH_AUTH_SOCK",  # never use the real SSH agent
 )

@@ -93,3 +93,27 @@ def test_progress_skips_small_and_unknown_sizes(caplog):
         small(done)
         unknown(done)
     assert progress_lines(caplog) == []
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("", False), ("0", False), ("false", False), ("1", True), ("yes", True)],
+)
+def test_quiet(monkeypatch, value, expected):
+    monkeypatch.setenv("PLASMASDS_QUIET", value)
+    assert _config.quiet() is expected
+
+
+def test_notice_prints_and_logs(capsys, caplog):
+    caplog.set_level(logging.INFO, logger="plasmasds_utility")
+    _config.notice("something to know")
+    assert capsys.readouterr().err == "plasmasds_utility: something to know\n"
+    assert "something to know" in caplog.text
+
+
+def test_quiet_notice_only_logs(monkeypatch, capsys, caplog):
+    caplog.set_level(logging.INFO, logger="plasmasds_utility")
+    monkeypatch.setenv("PLASMASDS_QUIET", "1")
+    _config.notice("something to know")
+    assert capsys.readouterr().err == ""
+    assert "something to know" in caplog.text
