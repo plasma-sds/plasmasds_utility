@@ -1133,3 +1133,55 @@ def test_quiet_silences_the_notice_and_the_exit_summary(home, monkeypatch, capsy
     log = (_config.log_dir() / _config.LOG_FILE).read_text(encoding="utf-8")
     assert 'update="never"' in log
     assert "renate-od: b.h5 (a reason)" in log
+
+
+no_symlinks = pytest.mark.skipif(
+    os.name == "nt", reason="symlinks need privileges on Windows"
+)
+
+
+@no_symlinks
+def test_local_files_follow_linked_folders(tmp_path):
+    tree = tmp_path / "private"
+    elsewhere = tmp_path / "other_disk" / "jorek"
+    place(tree / "a.h5", b"a")
+    place(elsewhere / "40673" / "step.h5", b"s")
+    place(elsewhere / ".hidden.h5", b"h")
+    (tree / "jorek").symlink_to(elsewhere, target_is_directory=True)
+    keys = [key for _, key in client_module._local_files(tree)]
+    assert keys == ["a.h5", "jorek/40673/step.h5"]
+
+
+@no_symlinks
+def test_local_files_survive_a_link_loop(tmp_path):
+    tree = tmp_path / "private"
+    place(tree / "a" / "f.h5", b"f")
+    (tree / "a" / "back").symlink_to(tree / "a", target_is_directory=True)
+    (tree / "up").symlink_to(tree, target_is_directory=True)
+    keys = [key for _, key in client_module._local_files(tree)]
+    assert keys == ["a/f.h5"]
+
+
+@no_symlinks
+def test_local_files_walk_two_links_to_one_folder(tmp_path):
+    tree = tmp_path / "private"
+    elsewhere = tmp_path / "shared"
+    place(elsewhere / "f.h5", b"f")
+    (tree / "one").parent.mkdir(parents=True, exist_ok=True)
+    (tree / "one").symlink_to(elsewhere, target_is_directory=True)
+    (tree / "two").symlink_to(elsewhere, target_is_directory=True)
+    keys = [key for _, key in client_module._local_files(tree)]
+    assert keys == ["one/f.h5", "two/f.h5"]
+
+
+@no_symlinks
+def test_check_updates_checks_files_in_a_linked_folder(servers, tmp_path):
+    servers.put_private("jorek/step.h5", b"new!", mtime=NEW)
+    client = DataClient("renate-od")
+    elsewhere = tmp_path / "other_disk"
+    place_at(elsewhere / "step.h5", b"old!", OLD)
+    linked = client.local_path("jorek")
+    linked.parent.mkdir(parents=True)
+    linked.symlink_to(elsewhere, target_is_directory=True)
+    assert client.check_updates() == [client.local_path("jorek/step.h5")]
+    assert (elsewhere / "step.h5").read_bytes() == b"new!"  # the data on the disk

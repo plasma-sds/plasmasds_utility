@@ -226,16 +226,26 @@ def _local_files(tree):
     """Return (path, key) for the data files below tree, sorted.
 
     Temporary files, anything hidden (including inside hidden directories) and
-    names that are not valid keys (with a warning) are left out.
+    names that are not valid keys (with a warning) are left out. Symbolic links
+    to files and to folders are followed, as by :meth:`DataClient.get`; a folder
+    that leads back to one of its own parents (a link loop) is not walked again.
     """
     if not tree.is_dir():
         return []
-    files = []
-    for path in sorted(p for p in tree.rglob("*") if p.is_file()):
-        parts = path.relative_to(tree).parts
-        if any(part.startswith(".") for part in parts) or path.name.endswith(".part"):
+    found = []
+    for folder, folders, names in os.walk(tree, followlinks=True):
+        if _loops(Path(folder), tree):
+            folders[:] = []
             continue
-        key = "/".join(parts)
+        folders[:] = [name for name in folders if not name.startswith(".")]
+        for name in names:
+            path = Path(folder, name)
+            if not name.startswith(".") and not name.endswith(".part"):
+                if path.is_file():  # a broken link is not
+                    found.append(path)
+    files = []
+    for path in sorted(found):
+        key = "/".join(path.relative_to(tree).parts)
         try:
             _paths.check_key(key)
         except PathError as error:
@@ -243,6 +253,15 @@ def _local_files(tree):
             continue
         files.append((path, key))
     return files
+
+
+def _loops(folder, tree):
+    """Return whether folder is, after links, one of its own parents below tree."""
+    real = os.path.realpath(folder)
+    return any(
+        os.path.realpath(tree / parent) == real
+        for parent in folder.relative_to(tree).parents
+    )
 
 
 class DataClient:
@@ -557,6 +576,10 @@ class DataClient:
         does, downloading it again where the server copy is newer. Temporary and
         hidden files are skipped, including anything inside a hidden directory,
         and so is a file whose name is not a valid key (with a warning).
+        Symbolic links are followed, to files and to folders, for example data
+        kept on another disk: a file in a linked folder is downloaded again into
+        that folder, while a linked file is replaced by a regular file, and the
+        file it pointed to is left as it was.
 
         Private files are checked with one SFTP listing per directory; public
         files with one HTTPS ``HEAD`` request each, so a public tree of many
