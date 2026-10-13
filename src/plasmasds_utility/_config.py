@@ -125,6 +125,70 @@ def env_data_dir():
     return path
 
 
+SERVER_ACCESS = ("all", "public", "local")
+
+
+def _ci():
+    """Return whether this runs in CI (``CI`` set, as in GitHub Actions, GitLab)."""
+    return os.environ.get("CI", "").lower() not in ("", "0", "false")
+
+
+def server_access():
+    """Return which servers the utility may contact.
+
+    Read from ``PLASMASDS_SERVER_ACCESS`` on every call, ignoring case and
+    surrounding spaces; if it is unset or empty, ``"public"`` when the ``CI``
+    variable is set (to anything but ``0`` or ``false``), else ``"all"``.
+
+    Returns
+    -------
+    str
+        ``"all"`` (both servers), ``"public"`` (only the public server, over
+        HTTPS) or ``"local"`` (no server: local copies only).
+
+    Raises
+    ------
+    ConfigError
+        If the variable has another value.
+    """
+    value = os.environ.get("PLASMASDS_SERVER_ACCESS", "").strip().lower()
+    if not value:
+        return "public" if _ci() else "all"
+    if value not in SERVER_ACCESS:
+        raise ConfigError(
+            f"PLASMASDS_SERVER_ACCESS must be one of {', '.join(SERVER_ACCESS)}, "
+            f"got {os.environ['PLASMASDS_SERVER_ACCESS']!r}"
+        )
+    return value
+
+
+def server_access_note():
+    """Return a phrase saying the server access mode and where it comes from.
+
+    For messages, for example ``"server access is public, because CI is set
+    (set PLASMASDS_SERVER_ACCESS to change it)"``.
+
+    Raises
+    ------
+    ConfigError
+        As for :func:`server_access`.
+    """
+    access = server_access()
+    if os.environ.get("PLASMASDS_SERVER_ACCESS", "").strip():
+        if access == "all":
+            return "server access is all (PLASMASDS_SERVER_ACCESS=all)"
+        return (
+            f"server access is {access} (PLASMASDS_SERVER_ACCESS={access}; unset "
+            "it, or set it to all, to use the servers)"
+        )
+    if access == "public":
+        return (
+            "server access is public, because CI is set (set "
+            "PLASMASDS_SERVER_ACCESS to change it)"
+        )
+    return "server access is all"
+
+
 def _defaults():
     """Return the packaged defaults as a dict."""
     text = resources.files("plasmasds_utility").joinpath("data", "defaults.toml")

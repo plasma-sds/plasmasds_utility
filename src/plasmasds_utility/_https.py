@@ -6,12 +6,11 @@ or interrupted transfer never leaves a partial file under the target name.
 
 import email.utils
 import http.client
-import shutil
 import time
 import urllib.error
 import urllib.request
 
-from plasmasds_utility import _files
+from plasmasds_utility import _config, _files
 from plasmasds_utility._config import logger
 from plasmasds_utility.exceptions import TransferError
 
@@ -68,7 +67,12 @@ def _fetch_once(url, target, timeout):
         with urllib.request.urlopen(url, timeout=timeout) as response:
             expected = _content_length(response.headers, url)
             last_modified = response.headers.get("Last-Modified")
-            shutil.copyfileobj(response, partial.file, _CHUNK)
+            report = _files.progress("downloading", url, expected)
+            done = 0
+            while chunk := response.read(_CHUNK):
+                partial.file.write(chunk)
+                done += len(chunk)
+                report(done)
         received = partial.file.tell()
         # A server that closes early gives a short read, not an exception.
         if expected is not None and received != expected:
@@ -129,6 +133,11 @@ def _run(url, action, verb, attempts, backoff):
     """
     if attempts < 1:
         raise ValueError(f"attempts must be at least 1, got {attempts}")
+    if _config.server_access() == "local":
+        raise TransferError(
+            f"not contacting the public server for {url}: "
+            f"{_config.server_access_note()}"
+        )
     if not url.startswith("https://"):
         logger.warning("using an unencrypted connection for %s", url)
     for attempt in range(1, attempts + 1):

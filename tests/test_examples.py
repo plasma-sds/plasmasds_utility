@@ -2,8 +2,9 @@
 
 They run in the test home (the ``home`` fixture sets the environment, which the
 script's process and the notebook's kernel inherit). They get public data only, and
-their connection check is pointed at a closed local port for SFTP, so CI never
-contacts the SFTP server; the public half of the check uses the real server.
+run with PLASMASDS_SERVER_ACCESS=public, as a client's CI would (it is the default
+when CI is set), so their connection check never contacts the SFTP server; the
+public half uses the real server.
 """
 
 import json
@@ -21,8 +22,13 @@ EXAMPLES = Path(__file__).parents[1] / "examples"
 
 
 @pytest.fixture
-def no_sftp(home):
-    """Point SFTP at a closed port on this computer, so it fails at once."""
+def public_access(home, monkeypatch):
+    """Run as a client's CI does: public server access.
+
+    SFTP is also pointed at a closed port on this computer, so that even if the
+    variable stopped reaching the examples, CI could not contact the server.
+    """
+    monkeypatch.setenv("PLASMASDS_SERVER_ACCESS", "public")
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
@@ -30,7 +36,7 @@ def no_sftp(home):
 
 
 @pytest.mark.network
-def test_script_runs(home, no_sftp):
+def test_script_runs(home, public_access):
     result = subprocess.run(
         [sys.executable, str(EXAMPLES / "get_data.py")],
         capture_output=True,
@@ -41,11 +47,11 @@ def test_script_runs(home, no_sftp):
     assert "it says: plasmasds_utility connection test" in result.stdout
     assert str(home) in result.stdout  # the data went to the test home
     assert "public data (HTTPS): ok" in result.stdout
-    assert "private data (SFTP): failed" in result.stdout
+    assert "private data (SFTP): not tried (server access is public)" in result.stdout
 
 
 @pytest.mark.network
-def test_notebook_runs(home, no_sftp, monkeypatch):
+def test_notebook_runs(home, public_access, monkeypatch):
     # Only this environment's kernel: not a "python3" kernel the developer has
     # installed for their user, pointing to another Python.
     for variable in ("JUPYTER_PATH", "JUPYTER_CONFIG_DIR"):
@@ -59,7 +65,7 @@ def test_notebook_runs(home, no_sftp, monkeypatch):
     assert "connection_test.txt" in outputs
     assert home.parent.name in outputs  # the kernel used the test home
     assert "public data (HTTPS): ok" in outputs
-    assert "private data (SFTP): failed" in outputs
+    assert "private data (SFTP): not tried (server access is public)" in outputs
 
 
 def test_notebook_is_committed_without_outputs():

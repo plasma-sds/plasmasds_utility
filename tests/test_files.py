@@ -124,3 +124,28 @@ def test_make_parent_reports_a_file_in_the_way(home):
     (home / "file").write_text("x", encoding="utf-8")
     with pytest.raises(PathError, match="cannot create the directory"):
         _files.make_parent(home / "file" / "c.bin")
+
+
+def progress_lines(caplog):
+    return [r.getMessage() for r in caplog.records if " %" in r.getMessage()]
+
+
+def test_progress_is_logged_every_tenth(caplog, monkeypatch):
+    caplog.set_level(logging.INFO, logger="plasmasds_utility")
+    monkeypatch.setattr(_files, "_PROGRESS_SIZE", 100)
+    report = _files.progress("downloading", "x.h5", 10_000_000)
+    for done in range(0, 10_000_001, 250_000):
+        report(done, 10_000_000)
+    assert progress_lines(caplog) == [
+        f"downloading x.h5: {p} % ({p // 10} of 10 MB)" for p in range(10, 101, 10)
+    ]
+
+
+def test_progress_skips_small_and_unknown_sizes(caplog):
+    caplog.set_level(logging.INFO, logger="plasmasds_utility")
+    small = _files.progress("downloading", "x.h5", _files._PROGRESS_SIZE - 1)
+    unknown = _files.progress("downloading", "x.h5", None)
+    for done in (0, 1000, _files._PROGRESS_SIZE):
+        small(done)
+        unknown(done)
+    assert progress_lines(caplog) == []

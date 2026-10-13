@@ -291,7 +291,6 @@ def download(
     ValueError
         If ``attempts`` is less than 1.
     """
-    _files.make_parent(target)
     _run(
         settings,
         remote,
@@ -317,6 +316,12 @@ def _run(settings, remote, action, verb, *, timeout, attempts, backoff, use_cach
     """
     if attempts < 1:
         raise ValueError(f"attempts must be at least 1, got {attempts}")
+    if _config.server_access() != "all":
+        # Not remembered in _unavailable: the environment may change.
+        raise AuthError(
+            f"not contacting the server over SFTP for {remote}: "
+            f"{_config.server_access_note()}"
+        )
     server = _server(settings)
     for attempt in range(1, attempts + 1):
         with _lock:
@@ -579,7 +584,11 @@ def upload(
             try:
                 before = os.fstat(file.fileno())
                 attributes = sftp.putfo(
-                    _Source(file, source), str(temporary), confirm=True
+                    _Source(file, source),
+                    str(temporary),
+                    file_size=before.st_size,
+                    callback=_files.progress("uploading", remote, before.st_size),
+                    confirm=True,
                 )
                 after = os.fstat(file.fileno())
                 if (before.st_size, before.st_mtime_ns) != (
@@ -868,9 +877,19 @@ def _fetch(sftp, remote, target):
         if _server_file_error(remote, error) is None:
             raise
         raise _server_file_error(remote, error) from error
+    _files.make_parent(target)  # only once the server has the file
     with _files.writing(target) as partial:
         try:
-            received = sftp.getfo(str(remote), partial.file)
+            received = sftp.getfo(
+                str(remote),
+                partial.file,
+                # paramiko's default, unbounded prefetch: a bound makes it stop
+                # prefetching for good once its requests are all answered, and the
+                # rest of the file is then read block by block while the requests
+                # still sent pile up unread (#33). Unbounded, a 1.1 GB download
+                # needed 65 MB of memory.
+                callback=_files.progress("downloading", remote, attributes.st_size),
+            )
         except OSError as error:  # opening the file can fail after stat worked
             if _server_file_error(remote, error) is None:
                 raise

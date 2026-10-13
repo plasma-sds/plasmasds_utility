@@ -108,6 +108,18 @@ def _explain_update():
         'newer; update="force" downloads again regardless. '
         "DataClient(prefix).check_updates() checks every local file of a client."
     )
+    access = _config.server_access()
+    if access == "public":
+        text += (
+            " Here, though, the private server is not contacted: with "
+            "private=None, a local private copy is used if there is one, else "
+            f"public data ({_config.server_access_note()})."
+        )
+    elif access == "local":
+        text += (
+            " Here, though, no server is contacted, so a file not on disk raises an "
+            f'error and update must stay "never": {_config.server_access_note()}.'
+        )
     _config.logger.info(text)
     print(f"plasmasds_utility: {text}", file=sys.stderr)
 
@@ -400,6 +412,20 @@ class DataClient:
         public copy normally costs one question per file and process; use
         ``private=False`` to skip it, for example offline).
 
+        The environment variable ``PLASMASDS_SERVER_ACCESS`` limits which servers
+        are contacted, for CI and machines without network:
+
+        - ``"all"`` (default, unless ``CI`` is set): as above;
+        - ``"public"`` (the default when ``CI`` is set): the private server is
+          not contacted. With ``private=None`` a local private copy is still
+          used, and public data otherwise, announced as a fallback;
+          ``private=True`` returns a local private copy or raises
+          :class:`AuthError` without connecting;
+        - ``"local"``: no server is contacted; a local copy is returned (private
+          first, with ``private=None``), a file not on disk raises
+          :class:`TransferError`, and so does any ``update`` other than
+          ``"never"``.
+
         Parameters
         ----------
         key : str
@@ -423,14 +449,16 @@ class DataClient:
             If the key is invalid, something other than a file is in the way, or
             the file cannot be written.
         AuthError
-            With ``private=True``, if private data is not available to you.
+            With ``private=True``, if private data is not available to you, or
+            the private server may not be contacted (``PLASMASDS_SERVER_ACCESS``).
         TransferError
             If the private server fails, other than by the fallbacks above, the
             file is not on the servers that were tried, or a requested check of a
             local copy cannot be done.
         ConfigError
-            As for :meth:`client_dir`, or if the configured SSH key is missing or
-            unreadable.
+            As for :meth:`client_dir`, if the configured SSH key is missing or
+            unreadable, or if ``PLASMASDS_SERVER_ACCESS`` has another value than
+            the three above.
         """
         if update not in _UPDATE_CHOICES:
             raise ValueError(
@@ -438,8 +466,13 @@ class DataClient:
                 f"got {update!r}"
             )
         _paths.check_key(key)  # an invalid call prints nothing
+        access = _config.server_access()
         _config.start_logging()  # so that the explanation reaches the log file
         _explain_update()
+        if access == "local":
+            return self._local_copy(key, private, update)
+        # Why the private server is not asked, if the mode says so.
+        skipped = _config.server_access_note() if access == "public" else None
         settings = _config.settings()
         refresh = update != "never"
         force = update == "force"
@@ -455,14 +488,17 @@ class DataClient:
                 except TransferError as error:
                     raise _kept(private_path, error, force) from error
                 return private_path
-            try:
-                return _sftp.download(
-                    settings, remote, private_path, use_cache=not refresh
-                )
-            except (AuthError, _sftp.NotOnServer) as error:
-                if private:
-                    raise
-                reason = error
+            if skipped is not None and private is None:
+                reason = skipped  # a fallback, announced like any other
+            else:
+                try:
+                    return _sftp.download(
+                        settings, remote, private_path, use_cache=not refresh
+                    )
+                except (AuthError, _sftp.NotOnServer) as error:
+                    if private:
+                        raise
+                    reason = error
         public_path = self.local_path(key, private=False)
         url = _paths.public_url(settings, self.prefix, key)
         if _present(public_path, key):
@@ -484,6 +520,32 @@ class DataClient:
         if reason is not None:
             _record_fallback(self.prefix, key, reason, public_path)
         return public_path
+
+    def _local_copy(self, key, private, update):
+        """Return a local copy for get() when no server may be contacted.
+
+        With ``private=None``, a public copy used for want of a private one is
+        a fallback, recorded and announced as in :meth:`get`.
+        """
+        if update != "never":
+            raise TransferError(
+                f"cannot check {key!r} with update={update!r}: no server is "
+                f"contacted ({_config.server_access_note()})"
+            )
+        for tree in (True, False):
+            if private is not None and private != tree:
+                continue
+            path = self.local_path(key, private=tree)
+            if _present(path, key):
+                if private is None and not tree:
+                    _record_fallback(
+                        self.prefix, key, _config.server_access_note(), path
+                    )
+                return path
+        raise TransferError(
+            f"{key!r} is not on disk, and no server is contacted "
+            f"({_config.server_access_note()})"
+        )
 
     def check_updates(self):
         """Check every local data file against its server and download newer ones.
@@ -512,15 +574,24 @@ class DataClient:
         Raises
         ------
         TransferError
-            After the whole check, if anything could not be checked; the message
+            At once, if ``PLASMASDS_SERVER_ACCESS`` is ``"local"``. Otherwise
+            after the whole check, if anything could not be checked; the message
             lists it. Files that could be checked are already updated: the
             exception's ``updated`` and ``missing`` attributes list the files that
             were downloaded again and those missing on their server.
         ConfigError
-            As for :meth:`client_dir`. A configured SSH key that is missing or
+            As for :meth:`client_dir`, or if ``PLASMASDS_SERVER_ACCESS`` has an
+            invalid value (see :meth:`get`). A configured SSH key that is missing or
             unreadable does not raise here: the private data is reported as not
-            checked, like a missing key.
+            checked, like a missing key. When ``PLASMASDS_SERVER_ACCESS`` is
+            ``"public"``, local private files are left out on purpose: the
+            report says so, and nothing is raised for them.
         """
+        if _config.server_access() == "local":
+            raise TransferError(
+                f"cannot check {self.prefix} for updates: no server is contacted "
+                f"({_config.server_access_note()})"
+            )
         settings = _config.settings()
         base = self.client_dir()
         updated, missing, failed = [], [], []
@@ -540,22 +611,37 @@ class DataClient:
                 failed.append((key, error))
                 _config.logger.warning("cannot check %s: %s", path, error)
         unchecked = 0
-        try:
-            self._check_private(settings, private, updated, missing, failed)
-        except (AuthError, ConfigError) as error:
-            done = {p for p in updated + missing} | {k for k, _ in failed}
-            unchecked = sum(
-                1 for path, key in private if path not in done and key not in done
+        skipped = 0  # private files left out on purpose (public server access)
+        if private and _config.server_access() == "public":
+            skipped = len(private)
+            _config.logger.info(
+                "the private data of %s was not checked: %s",
+                self.prefix,
+                _config.server_access_note(),
             )
-            failed.append(("private data (not checked)", error))
-            _config.logger.warning(
-                "the private data of %s was not checked: %s", self.prefix, error
-            )
+        else:
+            try:
+                self._check_private(settings, private, updated, missing, failed)
+            except (AuthError, ConfigError) as error:
+                done = {p for p in updated + missing} | {k for k, _ in failed}
+                unchecked = sum(
+                    1 for path, key in private if path not in done and key not in done
+                )
+                failed.append(("private data (not checked)", error))
+                _config.logger.warning(
+                    "the private data of %s was not checked: %s", self.prefix, error
+                )
         not_checked = unchecked + sum(1 for what, _ in failed if what in keys)
         print(
             f"plasmasds_utility: {len(public) + len(private)} local file(s) of "
             f"{self.prefix}: {len(updated)} updated, {len(missing)} not on the "
-            f"server, {not_checked} could not be checked",
+            f"server, {not_checked} could not be checked"
+            + (
+                f", {skipped} private file(s) not checked "
+                f"({_config.server_access_note()})"
+                if skipped
+                else ""
+            ),
             file=sys.stderr,
         )
         if _fallbacks:
@@ -664,7 +750,8 @@ class DataClient:
             be left on the server.
         AuthError
             If you have no SSH access to the server (see :meth:`get`); uploads of
-            public data need it too.
+            public data need it too. Also at once, without connecting, if
+            ``PLASMASDS_SERVER_ACCESS`` is ``"public"`` or ``"local"``.
         ConfigError
             As for :meth:`get`.
 
@@ -865,8 +952,9 @@ def check_connection():
     whether a fix (for example ``ssh-add``) worked, without restarting Python.
 
     A report is printed to standard output and logged: the version, the settings
-    in use (server, SSH key, data folder, log file) and, for each way of access,
-    "ok" or why it failed.
+    in use (server, SSH key, data folder, log file, server access) and, for each
+    way of access, "ok", why it failed, or "not tried" when
+    ``PLASMASDS_SERVER_ACCESS`` excludes it (see :meth:`DataClient.get`).
 
     Returns
     -------
@@ -877,7 +965,8 @@ def check_connection():
     ------
     ConfigError
         If the user configuration file is invalid, ``PLASMASDS_DATA_DIR`` is a
-        relative path, or the log directory cannot be created. Failures of the
+        relative path, ``PLASMASDS_SERVER_ACCESS`` has an invalid value, or the
+        log directory cannot be created. Failures of the
         connections themselves, including a missing SSH key, are reported, not
         raised.
 
@@ -890,6 +979,7 @@ def check_connection():
       SSH key: /home/me/.ssh/plasmasds_deep
       data folder: /home/me/.local/share/plasmasds
       log file: /home/me/.local/state/plasmasds/plasmasds.log
+      server access: all
       public data (HTTPS): ok
       private data (SFTP): ok
     """
@@ -913,6 +1003,11 @@ def check_connection():
         for prefix, path in settings["working_dirs"].items()
     ]
     lines.append(f"  log file: {_config.log_dir() / _config.LOG_FILE}")
+    access = _config.server_access()
+    lines.append(
+        "  server access: "
+        + _config.server_access_note().removeprefix("server access is ")
+    )
     prefix, key = _CONNECTION_TEST
     checks = {
         "public": lambda target: _https.download(
@@ -931,6 +1026,11 @@ def check_connection():
         for name, fetch in checks.items():
             way = "HTTPS" if name == "public" else "SFTP"
             target = Path(folder) / name
+            if access == "local" or (access == "public" and name == "private"):
+                lines.append(
+                    f"  {name} data ({way}): not tried (server access is {access})"
+                )
+                continue
             try:
                 fetch(target)
                 if target.read_bytes() != _CONNECTION_TEXT:
