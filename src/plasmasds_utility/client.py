@@ -863,6 +863,69 @@ class DataClient:
                     error,
                 )
 
+    def on_server(self, key, *, private=True):
+        """Return whether the server has a data file, without downloading it.
+
+        Private data is asked over SFTP (a ``stat``, which needs an SSH key),
+        public data over HTTPS (a ``HEAD`` request, as people downloading it see
+        it). The server is always asked: no earlier answer is reused. Whether a
+        local copy exists is a different question: ``local_path(key).is_file()``.
+
+        Parameters
+        ----------
+        key : str
+            The data key (see :meth:`local_path`).
+        private : bool, default True
+            True to ask the private server, False the public one.
+
+        Returns
+        -------
+        bool
+            True if something is at ``key`` on that server, False if nothing is.
+
+        Raises
+        ------
+        ValueError
+            If ``private`` is not True or False.
+        PathError
+            If the key is invalid.
+        AuthError
+            With ``private=True``, if private data is not available to you, or
+            the private server may not be contacted (``PLASMASDS_SERVER_ACCESS``).
+        TransferError
+            If the server cannot be asked (a timeout, say, or
+            ``PLASMASDS_SERVER_ACCESS`` is ``"local"``): "cannot tell" is never
+            answered as False.
+        ConfigError
+            As for :meth:`get`.
+
+        Examples
+        --------
+        >>> data = DataClient("bolometer")
+        >>> data.on_server("aug-axuv/geometry/AXUV_LOS_geom.txt")  # doctest: +SKIP
+        True
+        """
+        if not isinstance(private, bool):
+            raise ValueError(f"private must be True or False, got {private!r}")
+        _paths.check_key(key)
+        _config.start_logging()
+        settings = _config.settings()
+        if private:
+            try:
+                _sftp.stat(
+                    settings,
+                    _paths.private_remote(settings, self.prefix, key),
+                    use_cache=False,
+                )
+            except _sftp.NotOnServer:
+                return False
+            return True
+        try:
+            _https.head(_paths.public_url(settings, self.prefix, key))
+        except _https.NotOnServer:
+            return False
+        return True
+
     def set_working_dir(self, path):
         """Save the working directory for this client in the user configuration.
 
