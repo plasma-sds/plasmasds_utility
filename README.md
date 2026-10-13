@@ -123,7 +123,7 @@ Otherwise users' checks see their copy as newer and keep it.
 
 ### Large files
 
-Transfers stream to disk, so a file of several GB needs no more memory than a small one.
+Transfers stream to and from disk: downloading a 1.1 GB file over SFTP took under 70 MB of memory in a test.
 The progress of a transfer of 50 MB or more is written to the [log](#the-log) every 10 %.
 A transfer that fails starts again from the beginning, up to three times; resuming is planned in [#22](https://github.com/plasma-sds/plasmasds_utility/issues/22).
 Processes that ask for the same missing file at the same time each download it, so when many processes run in parallel, get the files they need once before starting them.
