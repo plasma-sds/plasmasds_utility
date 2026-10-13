@@ -38,7 +38,8 @@ Decisions already made (do not re-open them without an owner):
   There is no overwrite flag, and the utility never deletes files on the server.
   Without server-side locks this holds for one upload of a key at a time; simultaneous uploads of the same key are documented as unsupported.
   (Decided 2026-10-11 on #16.)
-- `PLASMASDS_SERVER_ACCESS` limits which servers are contacted: `all` (default), `public` (only HTTPS; the default when `CI` is set, so a client's CI never contacts the SFTP server) or `local` (no server; set explicitly, for example in cluster jobs).
+- `PLASMASDS_SERVER_ACCESS` limits which servers are contacted, not which local copies are used: `all` (default), `public` (only HTTPS; the default when `CI` is set, so a client's CI never contacts the SFTP server) or `local` (no server; set explicitly, for example in cluster jobs).
+  Public data used for want of private data is announced as a fallback in every mode.
   (Decided 2026-10-13 on #34.)
 - Failures are loud and specific: package-specific exception classes, messages that say where the failure happened, and a rotating log file.
 
@@ -53,7 +54,7 @@ The environment is managed with [pixi](https://pixi.sh); its configuration lives
 - Tests marked `network` download from the public data server and run by default.
   Offline, use `pixi run test -m "not private and not network"`: a `-m` on the command line replaces the default selection, so `-m "not network"` alone would select the private tests.
   They include running `examples/get_data.py` and executing `examples/get_data.ipynb` (with `nbclient`, in the test environment only); the notebook is committed without outputs, which a test checks.
-  Nothing that runs in CI contacts the SFTP server: CI has no key, the examples get public data only, and their tests run them with `PLASMASDS_SERVER_ACCESS=public` (decided 2026-10-11 on #17); the test fixture clears `CI` and `PLASMASDS_SERVER_ACCESS` for every other test.
+  Nothing that runs in CI contacts the SFTP server: CI has no key, the examples get public data only, and their tests run them with `PLASMASDS_SERVER_ACCESS=public`, with SFTP also pointed at a closed local port (decided 2026-10-11 on #17 and 2026-10-13 on #34); the test fixture clears `CI` and `PLASMASDS_SERVER_ACCESS` for every other test.
 - `pixi run lint`: ruff lint and format check; `pixi run ruff format .` applies the formatting.
 
 "A passing test run" in section 2 means `pixi run lint` and `pixi run test` both pass.

@@ -62,10 +62,12 @@ The client's folders on the server are created by its first upload.
 The environment variable `PLASMASDS_SERVER_ACCESS` limits which servers are contacted:
 
 - `all` (the default): both, as described below.
-- `public`: only the public server, over HTTPS; `get(key)` then takes public data only.
-  This is the default when the `CI` variable is set, as in GitHub Actions, so a client's tests in CI never try SFTP and need no setup.
+- `public`: only the public server, over HTTPS; `get(key)` uses a local private copy if there is one, and public data otherwise.
+  This is the default when the `CI` variable is set (to anything but `0` or `false`), as in GitHub Actions and GitLab CI, so a client's tests there never try SFTP and need no setup.
+  On a CI service that does not set `CI`, such as Jenkins or Azure Pipelines, set `PLASMASDS_SERVER_ACCESS=public` in the job.
 - `local`: no server at all; `get(key)` returns local copies only, and a file that is not on disk raises an error at once.
   Set it on machines without network, for example in cluster job scripts: `PLASMASDS_SERVER_ACCESS=local python run.py`.
+
 Runnable examples for a terminal and for a notebook are in [`examples/`](https://github.com/plasma-sds/plasmasds_utility/tree/master/examples).
 
 ## Getting data
@@ -90,7 +92,7 @@ It returns the first of these it finds:
 4. the file on the public server, downloaded over HTTPS.
 
 A local private copy is returned straight away, without contacting a server.
-A local public copy is returned once the private server has been asked for the file, at most once per file and session, because private data comes first; `private=False` skips that (for example offline).
+A local public copy is returned once the private server has been asked for the file, at most once per file and session, because private data comes first; `private=False` skips that; on a machine without network, set `PLASMASDS_SERVER_ACCESS=local` (see [Using it in a client package](#using-it-in-a-client-package)).
 Downloads are written to a temporary file and moved into place only when complete, and the local file keeps the server's modification time.
 
 To choose the source, pass `private`:
@@ -282,6 +284,7 @@ plasmasds_utility 0.1.0 connection check
   SSH key: none saved (the SSH agent and ~/.ssh/id_* keys)
   data folder: /home/me/.local/share/plasmasds
   log file: /home/me/.local/state/plasmasds/plasmasds.log
+  server access: all
   public data (HTTPS): ok
   private data (SFTP): failed: no SSH key found for data@[deep.reak.bme.hu]:72: ...
 ```
@@ -299,7 +302,7 @@ The usual failures:
 - **A timeout or "Unable to connect to port 72", for private data only:** the network blocks the SSH port; try another network or a VPN.
   Public data uses HTTPS, which goes through a proxy set in `HTTPS_PROXY`; SFTP does not.
 - **"CERTIFICATE_VERIFY_FAILED" for public data:** a network that inspects HTTPS traffic replaces the server's certificate; ask the network's admins, or use another network.
-- **"not contacting the private server"** or **"no server is contacted":** `PLASMASDS_SERVER_ACCESS` is `public` or `local`, or `CI` is set; the message says which.
+- **"not contacting the server over SFTP"**, **"not contacting the public server"** or **"no server is contacted":** `PLASMASDS_SERVER_ACCESS` is `public` or `local`, or `CI` is set; the message says which.
   Unset it, or set it to `all`, to use the servers.
 - **"the test file … is missing":** the server was reached; tell the server's admins.
   (For them: the check needs `plasmasds_utility/test/connection_test.txt` in both trees, with the content `plasmasds_utility connection test`; the tests use the same folder for files of their own, which they remove themselves.)
