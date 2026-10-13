@@ -75,29 +75,33 @@ def test_large_file_is_streamed_intact(sftp_server, tmp_path, home):
     assert target.read_bytes() == body
 
 
-def test_download_bounds_prefetch_and_logs_progress(
+def test_download_prefetches_to_the_end_and_logs_progress(
     sftp_server, tmp_path, home, monkeypatch, caplog
 ):
+    # A bounded prefetch stopped prefetching for good after the first batch of
+    # requests and read the rest block by block (#33): check it stays on.
     caplog.set_level(logging.INFO, logger="plasmasds_utility")
     monkeypatch.setattr(_files, "_PROGRESS_SIZE", 1)
-    getfo = paramiko.SFTPClient.getfo
-    limits = []
+    read = paramiko.SFTPFile._read
+    stopped = []
 
-    def spy(sftp, *args, **kwargs):
-        limits.append(kwargs.get("max_concurrent_prefetch_requests"))
-        return getfo(sftp, *args, **kwargs)
+    def spy(self, size):
+        data = read(self, size)
+        if data and not self._prefetching:
+            stopped.append(self._realpos)
+        return data
 
-    monkeypatch.setattr(paramiko.SFTPClient, "getfo", spy)
-    body = os.urandom(1024 * 1024)
+    monkeypatch.setattr(paramiko.SFTPFile, "_read", spy)
+    body = os.urandom(4 * 1024 * 1024)  # 128 blocks of 32 kB
     path = tmp_path / "server" / Path(*REMOTE.parts)
     path.parent.mkdir(parents=True)
     path.write_bytes(body)
     download(home / "x.h5")
     assert (home / "x.h5").read_bytes() == body
-    assert limits == [_sftp._PREFETCH]
+    assert stopped == []
     messages = [r.getMessage() for r in caplog.records]
-    assert f"downloading {REMOTE}: 50 % (0 of 1 MB)" in messages
-    assert f"downloading {REMOTE}: 100 % (1 of 1 MB)" in messages
+    assert f"downloading {REMOTE}: 50 % (2 of 4 MB)" in messages
+    assert f"downloading {REMOTE}: 100 % (4 of 4 MB)" in messages
 
 
 def test_missing_file_is_not_retried(sftp_server, home, sleeps):

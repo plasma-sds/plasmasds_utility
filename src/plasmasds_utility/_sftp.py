@@ -55,11 +55,6 @@ _sessions = {}  # (host, port, user) -> (SSHClient, SFTPClient)
 _unavailable = {}  # (host, port, user) -> AuthError
 _not_on_server = set()  # ((host, port, user), remote path) known to be missing
 _KEEPALIVE = 60  # seconds between SSH keepalive messages on an idle session
-# Read requests a download keeps in flight (32 kB each). paramiko sends one for every
-# block of a file at once by default: about 43,000 for a 1.4 GB file. 64 requests are
-# 2 MB, paramiko's default SSH window, so the bound is never tighter than the flow
-# control already in place and costs no speed.
-_PREFETCH = 64
 
 
 def _server(settings):
@@ -882,8 +877,12 @@ def _fetch(sftp, remote, target):
             received = sftp.getfo(
                 str(remote),
                 partial.file,
+                # paramiko's default, unbounded prefetch: a bound makes it stop
+                # prefetching for good once its requests are all answered, and the
+                # rest of the file is then read block by block while the requests
+                # still sent pile up unread (#33). Unbounded, a 1.1 GB download
+                # needed 65 MB of memory.
                 callback=_files.progress("downloading", remote, attributes.st_size),
-                max_concurrent_prefetch_requests=_PREFETCH,
             )
         except OSError as error:  # opening the file can fail after stat worked
             if _server_file_error(remote, error) is None:
