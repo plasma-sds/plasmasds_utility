@@ -187,6 +187,20 @@ data.upload(
 ```
 
 Each client package chooses its own archive layout.
+An upload refused because the key is already there raises `AlreadyOnServer`, so a client uploading many files can skip those already up, and `on_server` asks whether the server has a key, without downloading it:
+
+```python
+from plasmasds_utility import AlreadyOnServer
+
+for key in keys:
+    try:
+        data.upload(key)
+    except AlreadyOnServer:
+        pass  # already up
+
+data.on_server(key)  # the private server; private=False asks the public one
+```
+
 Nothing may be at `archive_to` yet; if there is no file to archive, the upload goes ahead with a warning.
 Replacing a file with one of the same size also gives a warning, in case it is the same file: uploading it again only makes every user download it again.
 The content is not compared, as new data often keeps the size of the old (HDF5 files, for example).
