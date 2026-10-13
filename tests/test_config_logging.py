@@ -117,3 +117,80 @@ def test_quiet_notice_only_logs(monkeypatch, capsys, caplog):
     _config.notice("something to know")
     assert capsys.readouterr().err == ""
     assert "something to know" in caplog.text
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    """Set the time seen by progress() with clock.now."""
+    clock = type("Clock", (), {"now": 0.0})()
+    monkeypatch.setattr(_config, "_clock", lambda: clock.now)
+    return clock
+
+
+MB = 1_000_000
+
+
+def test_progress_start_line_names_the_size_and_how_to_follow(clock, capsys):
+    _config.progress("downloading", "big.h5", 1400 * MB)
+    err = capsys.readouterr().err
+    assert err.startswith("plasmasds_utility: downloading big.h5 (1400 MB); ")
+    assert "tail -f " in err or "Get-Content -Wait" in err
+    assert _config.LOG_FILE in err
+
+
+def test_follow_hint_on_windows_and_elsewhere():
+    path = _config.log_dir() / _config.LOG_FILE
+    assert _config._follow_hint(windows=True) == (
+        f'Get-Content -Wait -Tail 20 "{path}"'
+    )
+    assert _config._follow_hint(windows=False).startswith("tail -f ")
+
+
+def test_progress_status_every_minute(clock, capsys):
+    report = _config.progress("downloading", "big.h5", 200 * MB)
+    capsys.readouterr()
+    for now, done in [(30, 30), (61, 60), (100, 100), (125, 120)]:
+        clock.now = now
+        report(done * MB)
+    lines = capsys.readouterr().err.splitlines()
+    assert lines == [
+        "plasmasds_utility: downloading big.h5: 60 of 200 MB (30 %), 1.0 MB/s, "
+        "about 2 min left",
+        "plasmasds_utility: downloading big.h5: 120 of 200 MB (60 %), 1.0 MB/s, "
+        "about 83 s left",
+    ]
+
+
+def test_progress_status_says_when_nothing_arrives(clock, capsys):
+    report = _config.progress("uploading", "big.h5", 200 * MB)
+    capsys.readouterr()
+    clock.now = 61
+    report(0)
+    assert capsys.readouterr().err.endswith("0 of 200 MB (0 %), 0.0 MB/s, stalled\n")
+
+
+def test_short_transfer_prints_only_the_start_line(clock, capsys):
+    report = _config.progress("downloading", "big.h5", 200 * MB)
+    for now, done in [(10, 50), (30, 150), (45, 200)]:
+        clock.now = now
+        report(done * MB)
+    assert len(capsys.readouterr().err.splitlines()) == 1
+
+
+def test_quiet_progress_only_logs(clock, monkeypatch, capsys, caplog):
+    caplog.set_level(logging.INFO, logger="plasmasds_utility")
+    monkeypatch.setenv("PLASMASDS_QUIET", "1")
+    report = _config.progress("downloading", "big.h5", 200 * MB)
+    clock.now = 61
+    report(60 * MB)
+    assert capsys.readouterr().err == ""
+    assert "downloading big.h5 (200 MB)" in caplog.text
+    assert "60 of 200 MB (30 %)" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("seconds", "text"),
+    [(40, "40 s"), (89, "89 s"), (150, "2 min"), (3000, "50 min"), (7500, "2 h 5 min")],
+)
+def test_duration(seconds, text):
+    assert _config._duration(seconds) == text

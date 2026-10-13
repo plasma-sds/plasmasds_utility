@@ -31,7 +31,9 @@ The packaged ``working_dirs`` is always empty; it is there so that the user's
 import json
 import logging
 import os
+import shlex
 import sys
+import time
 import tomllib
 from importlib import resources
 from logging.handlers import RotatingFileHandler
@@ -484,38 +486,68 @@ def _stop_logging():
     logger.setLevel(logging.NOTSET)
 
 
-# Transfers at least this large (bytes) log their progress; smaller ones log only
+# Transfers at least this large (bytes) report their progress; smaller ones log only
 # when done.
 _PROGRESS_SIZE = 50_000_000
+_STATUS_EVERY = 60  # seconds between the status lines of a large transfer
+_clock = time.monotonic  # replaced in the tests
+
+
+def _follow_hint(windows=os.name == "nt"):
+    """Return the command that shows the log file as it grows."""
+    path = log_dir() / LOG_FILE
+    if windows:
+        return f'Get-Content -Wait -Tail 20 "{path}"'
+    return f"tail -f {shlex.quote(str(path))}"
+
+
+def _duration(seconds):
+    """Return a rough, readable duration: 40 s, 12 min, 2 h 5 min."""
+    seconds = round(seconds)
+    if seconds < 90:
+        return f"{seconds} s"
+    minutes = round(seconds / 60)
+    if minutes < 90:
+        return f"{minutes} min"
+    return f"{minutes // 60} h {minutes % 60} min"
 
 
 def progress(verb, name, total):
-    """Return a callback that logs the progress of a large transfer at INFO.
+    """Report the progress of a transfer of 50 MB or more; return its callback.
 
-    The callback takes the bytes transferred so far (and ignores a second
-    argument, as paramiko passes the total too); it logs at most once per 10 %,
-    when another 10 % is done, if ``total`` is at least 50 MB.
+    When called, prints a start line (see :func:`notice`) with the size and the
+    command that follows the log file. The returned callback takes the bytes
+    transferred so far (and ignores a second argument, as paramiko passes the
+    total too). It logs a line at INFO each time another 10 % is done, and
+    every 60 seconds a status line (see :func:`notice`) with how much is done,
+    the average speed and the time left. Smaller transfers, and those of
+    unknown size, report nothing.
 
     Parameters
     ----------
     verb : str
-        What is done, for the message, for example ``"downloading"``.
+        What is done, for the messages, for example ``"downloading"``.
     name : object
-        What is transferred, for the message.
+        What is transferred, for the messages.
     total : int or None
-        The size in bytes; None (unknown) logs nothing.
+        The size in bytes, or None if unknown.
 
     Returns
     -------
     callable
         ``callback(done, total=None)``.
     """
+    if not total or total < _PROGRESS_SIZE:
+        return lambda done, _total=None: None
+    notice(
+        f"{verb} {name} ({total // 1_000_000} MB); to follow the progress in the "
+        f"log: {_follow_hint()}"
+    )
+    start = last = _clock()
     reported = 0  # tenths logged so far
 
     def report(done, _total=None):
-        nonlocal reported
-        if not total or total < _PROGRESS_SIZE:
-            return
+        nonlocal reported, last
         tenths = min(done * 10 // total, 10)
         if tenths > reported:
             reported = tenths
@@ -526,6 +558,19 @@ def progress(verb, name, total):
                 tenths * 10,
                 done // 1_000_000,
                 total // 1_000_000,
+            )
+        now = _clock()
+        if now - last >= _STATUS_EVERY and done < total:
+            last = now
+            speed = done / (now - start)  # bytes per second
+            left = (
+                f"about {_duration((total - done) / speed)} left"
+                if speed
+                else "stalled"
+            )
+            notice(
+                f"{verb} {name}: {done // 1_000_000} of {total // 1_000_000} MB "
+                f"({done * 100 // total} %), {speed / 1e6:.1f} MB/s, {left}"
             )
 
     return report
