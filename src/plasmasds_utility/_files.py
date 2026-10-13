@@ -7,7 +7,7 @@ write never leaves a partial file under the target name.
 import contextlib
 import logging
 import os
-import tempfile
+import secrets
 
 from plasmasds_utility.exceptions import PathError
 
@@ -67,34 +67,30 @@ class _LocalFile:
         return self._file.tell()
 
 
-def _read_umask():
-    """Return the umask of this process.
+def _create(target):
+    """Create a new, empty temporary file next to target; return (fd, path).
 
-    On Linux it is read from ``/proc``; elsewhere it can only be read by setting
-    it and setting it back, which is done once, at import, before any transfer.
+    Created with mode ``0o666`` like any new file, so the umask and a default
+    ACL of the folder apply as usual (``tempfile`` would force ``0o600``, which
+    a shared group folder cannot read, #25). A name already taken is retried.
     """
-    try:
-        with open("/proc/self/status", encoding="ascii") as status:
-            for line in status:
-                if line.startswith("Umask:"):
-                    return int(line.split()[1], 8)
-    except (OSError, ValueError, IndexError):
-        pass
-    mask = os.umask(0o022)
-    os.umask(mask)
-    return mask
-
-
-# New files get 0o666 minus this, like any file the user creates (#25).
-_UMASK = _read_umask()
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0)
+    for _ in range(100):
+        path = target.parent / f".{target.name}.{secrets.token_hex(4)}.part"
+        try:
+            return os.open(path, flags, 0o666), path
+        except FileExistsError:
+            continue
+    raise FileExistsError(f"no free temporary name next to {target}")
 
 
 @contextlib.contextmanager
-def writing(target, mode=None):
+def writing(target):
     """Write target atomically.
 
     Yields an object whose ``file`` is a binary file opened in the target's
-    directory, under a unique ``.part`` name. When the block ends normally the file
+    directory, under a unique ``.part`` name, with the permissions any new file
+    of the user gets there (see :func:`_create`). When the block ends normally the file
     is closed, given the timestamp in ``mtime`` if one was set, and moved over
     target with :func:`os.replace`. If the block raises, the temporary file is
     removed and an existing target is left unchanged.
@@ -108,11 +104,6 @@ def writing(target, mode=None):
     ----------
     target : pathlib.Path
         The file to write. Its directory must exist (see :func:`make_parent`).
-    mode : int, optional
-        The permissions of the file on POSIX systems. The default is what a new
-        file of the user gets: ``0o666`` minus the umask, so that data in a
-        shared group folder is readable by the group; ``tempfile`` alone would
-        give ``0o600``. Ignored on Windows.
 
     Yields
     ------
@@ -126,18 +117,10 @@ def writing(target, mode=None):
         If the file cannot be created, written or moved into place.
     """
     try:
-        fd, temporary = tempfile.mkstemp(
-            dir=target.parent, prefix=f".{target.name}.", suffix=".part"
-        )
+        fd, temporary = _create(target)
     except OSError as error:
         raise _local_error(target, error) from error
     try:
-        if hasattr(os, "fchmod"):  # POSIX; Windows has no such permissions
-            try:
-                os.fchmod(fd, (0o666 & ~_UMASK) if mode is None else mode)
-            except OSError as error:
-                os.close(fd)
-                raise _local_error(target, error) from error
         with os.fdopen(fd, "wb") as file:
             partial = _Partial(_LocalFile(file, target))
             yield partial

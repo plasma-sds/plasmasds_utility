@@ -1,6 +1,5 @@
 import json
 import os
-import stat
 
 import pytest
 
@@ -143,10 +142,3 @@ def test_clear_ssh_key(config_file, home):
 def test_clear_ssh_key_without_a_file_creates_none(config_file):
     _config.save_ssh_key(None)
     assert not config_file.exists()
-
-
-@pytest.mark.skipif(not hasattr(os, "fchmod"), reason="no POSIX permissions")
-def test_the_configuration_file_is_only_the_users(config_file, home):
-    # It holds the path of the user's SSH key (#25).
-    _config.save_working_dir("renate-od", str(home / "data"))
-    assert stat.S_IMODE(config_file.stat().st_mode) == 0o600

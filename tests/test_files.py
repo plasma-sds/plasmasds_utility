@@ -95,7 +95,7 @@ def test_failed_create_is_a_path_error(home, monkeypatch):
     def refuse(*args, **kwargs):
         raise PermissionError("read-only directory")
 
-    monkeypatch.setattr(_files.tempfile, "mkstemp", refuse)
+    monkeypatch.setattr(_files, "_create", refuse)
     with pytest.raises(PathError, match="read-only directory"):
         with _files.writing(home / "a.bin"):
             pass
@@ -127,9 +127,7 @@ def test_make_parent_reports_a_file_in_the_way(home):
         _files.make_parent(home / "file" / "c.bin")
 
 
-posix_only = pytest.mark.skipif(
-    not hasattr(os, "fchmod"), reason="Windows has no POSIX permissions"
-)
+posix_only = pytest.mark.skipif(os.name == "nt", reason="no POSIX permissions")
 
 
 def mode_of(path):
@@ -137,29 +135,25 @@ def mode_of(path):
 
 
 @posix_only
-@pytest.mark.parametrize(("umask", "mode"), [(0o022, 0o644), (0o002, 0o664)])
-def test_new_files_get_the_mode_of_a_normal_file(home, monkeypatch, umask, mode):
-    # tempfile alone gives 0o600, which a shared group folder cannot read (#25).
-    monkeypatch.setattr(_files, "_UMASK", umask)
-    target = home / "a.bin"
-    with _files.writing(target) as partial:
-        partial.file.write(b"data")
-    assert mode_of(target) == mode
-
-
-@posix_only
-def test_an_explicit_mode_wins(home):
-    target = home / "a.bin"
-    with _files.writing(target, mode=0o600) as partial:
-        partial.file.write(b"data")
-    assert mode_of(target) == 0o600
-
-
-@posix_only
-def test_the_umask_is_read_without_changing_it():
-    mask = os.umask(0o027)
+@pytest.mark.parametrize(
+    ("umask", "mode"), [(0o022, 0o644), (0o002, 0o664), (0o027, 0o640)]
+)
+def test_new_files_get_the_mode_of_any_new_file(home, umask, mode):
+    # tempfile would give 0o600, which a shared group folder cannot read (#25).
+    previous = os.umask(umask)
     try:
-        assert _files._read_umask() == 0o027
+        with _files.writing(home / "a.bin") as partial:
+            partial.file.write(b"data")
     finally:
-        os.umask(mask)
-    assert _files._read_umask() == mask
+        os.umask(previous)
+    assert mode_of(home / "a.bin") == mode
+
+
+def test_temporary_names_are_retried_when_taken(home, monkeypatch):
+    tokens = iter(["0000", "0000", "1111"])
+    monkeypatch.setattr(_files.secrets, "token_hex", lambda n: next(tokens))
+    (home / ".a.bin.0000.part").write_bytes(b"someone else's")
+    with _files.writing(home / "a.bin") as partial:
+        partial.file.write(b"data")
+    assert (home / "a.bin").read_bytes() == b"data"
+    assert (home / ".a.bin.0000.part").read_bytes() == b"someone else's"

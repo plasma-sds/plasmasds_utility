@@ -155,7 +155,7 @@ def test_local_write_failure_is_a_path_error_not_retried(
     def refuse(*args, **kwargs):
         raise PermissionError("read-only directory")
 
-    monkeypatch.setattr(_files.tempfile, "mkstemp", refuse)
+    monkeypatch.setattr(_files, "_create", refuse)
     with pytest.raises(PathError, match=r"cannot write .*x\.h5: read-only"):
         download(home / "x.h5")
     assert served.connections == 1
