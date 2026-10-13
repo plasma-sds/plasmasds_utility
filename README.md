@@ -7,19 +7,15 @@ A shared utility for the plasma-sds synthetic diagnostics (renate, neuro_bes, sy
 - It serves several client packages, each with its own folder on the server and locally; the local tree mirrors the server.
 - It runs on Linux and Windows with Python 3.11 or newer; its only dependency is paramiko.
 
-> **Status:** not released yet; the first release is tracked in [#30](https://github.com/plasma-sds/plasmasds_utility/issues/30).
-> Until then, install it from GitHub (below).
-
 The design and the decisions that amend it are in [issue #6](https://github.com/plasma-sds/plasmasds_utility/issues/6); progress is tracked on the [project board](https://github.com/orgs/plasma-sds/projects/10).
 
 ## Installing
 
 ```bash
-pip install "plasmasds_utility @ git+https://github.com/plasma-sds/plasmasds_utility@development"
+pip install plasmasds_utility
 ```
 
-This needs `git` on the computer.
-Once it is released, this becomes `pip install plasmasds_utility`.
+The development version, from GitHub (this needs `git`): `pip install "plasmasds_utility @ git+https://github.com/plasma-sds/plasmasds_utility@development"`.
 To check that it can reach the data server, run `python -c "import plasmasds_utility; plasmasds_utility.check_connection()"` (see [Troubleshooting](#troubleshooting)).
 
 ## Using it in a client package
@@ -29,20 +25,13 @@ A client package declares the dependency in its `pyproject.toml`:
 ```toml
 [project]
 dependencies = [
-    # until the first release:
-    "plasmasds_utility @ git+https://github.com/plasma-sds/plasmasds_utility@development",
-    # afterwards, up to the next release that may change the interface:
-    # "plasmasds_utility>=0.1,<0.2",
+    # up to the next release that may change the interface
+    "plasmasds_utility>=0.1,<0.2",
 ]
-
-# Only for the GitHub form, if the client builds with hatchling:
-[tool.hatch.metadata]
-allow-direct-references = true
 ```
 
-A client managed with pixi can list it under `[tool.pixi.pypi-dependencies]` instead, as `plasmasds_utility = { git = "https://github.com/plasma-sds/plasmasds_utility", branch = "development" }`.
-`development` moves; to keep a client's results reproducible, pin a tag instead, for example `step/6-8` (`tag = "step/6-8"` for pixi, `@step/6-8` in the GitHub form).
-A package published on PyPI cannot depend on a GitHub address, so a client is published only after the first release of this utility.
+A client managed with pixi can list it under `[tool.pixi.pypi-dependencies]` instead, as `plasmasds_utility = ">=0.1,<0.2"`.
+Until 1.0, a release that raises the second number (0.1 to 0.2) may change the interface, so the upper bound keeps a client working until it is updated.
 
 The client creates one `DataClient` for its own folder on the server, its *prefix*, usually its package name, and asks it for files wherever it needs them:
 
