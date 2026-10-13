@@ -1,0 +1,61 @@
+name: Publish
+
+# Publishes a release to PyPI when a release tag (vMAJOR.MINOR.PATCH) is pushed.
+# An owner merges development into master, then signs and pushes the tag on
+# master (AGENTS.md section 4). PyPI trusts this workflow through trusted
+# publishing: no token is stored in the repository.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # to check that the tag is on master
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: Check the tag
+        run: |
+          version=$(python -c "import re, pathlib; print(re.search(r'__version__ = \"(.+)\"', pathlib.Path('src/plasmasds_utility/__init__.py').read_text()).group(1))")
+          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "the tag ${GITHUB_REF_NAME} does not match the package version ${version}"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/master; then
+            echo "the tag ${GITHUB_REF_NAME} is not on master"
+            exit 1
+          fi
+      - name: Build
+        run: |
+          python -m pip install build twine
+          python -m build
+          python -m twine check --strict dist/*
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/p/plasmasds_utility
+    permissions:
+      id-token: write  # for trusted publishing
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@v1.14.2
