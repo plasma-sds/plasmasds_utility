@@ -331,7 +331,7 @@ def _write_atomic(path, text):
     removed and an existing file is left unchanged.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    with _files.writing(path) as partial:
+    with _files.writing(path, mode=0o600) as partial:  # per user: only theirs
         partial.file.write(bytes(text, "utf-8"))
 
 

@@ -1,5 +1,7 @@
 import logging
+import os
 import socket
+import stat
 import time
 import types
 
@@ -32,6 +34,15 @@ def test_download_writes_the_file_with_the_server_mtime(http_server, home, sleep
     assert http_server.requests["/a.txt"] == 1
     assert leftovers(home) == []
     assert sleeps == []
+
+
+@pytest.mark.skipif(not hasattr(os, "fchmod"), reason="no POSIX permissions")
+def test_downloaded_file_is_readable_by_others(http_server, home, monkeypatch):
+    # For shared group data folders (#25): like a file the user creates.
+    monkeypatch.setattr(_files, "_UMASK", 0o022)
+    http_server.serve("/a.txt", {"body": b"hello"})
+    target = _https.download(http_server.url("/a.txt"), home / "a.txt")
+    assert stat.S_IMODE(target.stat().st_mode) == 0o644
 
 
 def test_large_download_logs_progress(http_server, home, monkeypatch, caplog, capsys):

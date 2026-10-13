@@ -1,5 +1,6 @@
 import logging
 import os
+import stat
 
 import pytest
 
@@ -124,3 +125,41 @@ def test_make_parent_reports_a_file_in_the_way(home):
     (home / "file").write_text("x", encoding="utf-8")
     with pytest.raises(PathError, match="cannot create the directory"):
         _files.make_parent(home / "file" / "c.bin")
+
+
+posix_only = pytest.mark.skipif(
+    not hasattr(os, "fchmod"), reason="Windows has no POSIX permissions"
+)
+
+
+def mode_of(path):
+    return stat.S_IMODE(path.stat().st_mode)
+
+
+@posix_only
+@pytest.mark.parametrize(("umask", "mode"), [(0o022, 0o644), (0o002, 0o664)])
+def test_new_files_get_the_mode_of_a_normal_file(home, monkeypatch, umask, mode):
+    # tempfile alone gives 0o600, which a shared group folder cannot read (#25).
+    monkeypatch.setattr(_files, "_UMASK", umask)
+    target = home / "a.bin"
+    with _files.writing(target) as partial:
+        partial.file.write(b"data")
+    assert mode_of(target) == mode
+
+
+@posix_only
+def test_an_explicit_mode_wins(home):
+    target = home / "a.bin"
+    with _files.writing(target, mode=0o600) as partial:
+        partial.file.write(b"data")
+    assert mode_of(target) == 0o600
+
+
+@posix_only
+def test_the_umask_is_read_without_changing_it():
+    mask = os.umask(0o027)
+    try:
+        assert _files._read_umask() == 0o027
+    finally:
+        os.umask(mask)
+    assert _files._read_umask() == mask
