@@ -25,7 +25,7 @@ class AuthError(TransferError):
     """SSH authentication or host key verification failed."""
 
 
-class AlreadyOnServer(TransferError):
+class AlreadyOnServerError(TransferError):
     """An upload would replace a file on the server without archiving it.
 
     Raised by :meth:`DataClient.upload` when the key is already on the server and

@@ -808,7 +808,7 @@ class DataClient:
             server refuses a step, or the upload fails after the retries. The
             message says which step failed, whether the file on the server is
             unchanged, and what may be left on the server.
-        AlreadyOnServer
+        AlreadyOnServerError
             If the file is on the server and ``archive_to`` is not given; nothing
             was replaced. A :class:`TransferError`, so a client uploading
             many files can catch it to skip those already up.

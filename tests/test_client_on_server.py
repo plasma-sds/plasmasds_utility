@@ -4,7 +4,7 @@ import pytest
 from conftest import FakeAgent, write_config
 
 from plasmasds_utility import (
-    AlreadyOnServer,
+    AlreadyOnServerError,
     AuthError,
     DataClient,
     PathError,
@@ -145,4 +145,4 @@ def test_a_login_failure_is_remembered(servers, ssh_keys, monkeypatch):
 
 def test_already_on_server_is_a_transfer_error():
     # Callers that catch TransferError keep working.
-    assert issubclass(AlreadyOnServer, TransferError)
+    assert issubclass(AlreadyOnServerError, TransferError)

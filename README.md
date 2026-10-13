@@ -193,15 +193,15 @@ The content is not compared, as new data often keeps the size of the old (HDF5 f
 The old file is not copied: it gets a second name on the server (a hard link), so archiving costs no space or time.
 Do not upload the same key from two places at once: the server has no locks, so one of two simultaneous replacements can be lost.
 
-An upload refused because the key is already there raises `AlreadyOnServer`, so a client uploading many files can skip those already up:
+An upload refused because the key is already there raises `AlreadyOnServerError`, so a client uploading many files can skip those already up:
 
 ```python
-from plasmasds_utility import AlreadyOnServer
+from plasmasds_utility import AlreadyOnServerError
 
 for key in keys:
     try:
         data.upload(key)
-    except AlreadyOnServer:
+    except AlreadyOnServerError:
         pass  # already up
 ```
 

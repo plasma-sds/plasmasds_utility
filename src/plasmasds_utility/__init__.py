@@ -10,7 +10,7 @@ from plasmasds_utility.client import (
     show_public_fallbacks,
 )
 from plasmasds_utility.exceptions import (
-    AlreadyOnServer,
+    AlreadyOnServerError,
     AuthError,
     ConfigError,
     PathError,
@@ -21,7 +21,7 @@ from plasmasds_utility.exceptions import (
 __version__ = "0.1.0.dev0"
 
 __all__ = [
-    "AlreadyOnServer",
+    "AlreadyOnServerError",
     "AuthError",
     "ConfigError",
     "DataClient",
