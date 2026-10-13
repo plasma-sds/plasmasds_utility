@@ -214,6 +214,8 @@ The utility keeps that client's data in a *client directory*, and its own config
 On Linux, `$XDG_DATA_HOME`, `$XDG_CONFIG_HOME` and `$XDG_STATE_HOME` replace `~/.local/share`, `~/.config` and `~/.local/state` when they are set.
 Nothing is ever written inside the installed package.
 
+On Linux and macOS, downloaded files get the permissions any new file of yours gets in that folder (`0666` minus your umask, usually `0644`, or what the folder's default ACL says), so a data folder shared with a group, through `PLASMASDS_DATA_DIR` or `set_working_dir`, is readable by its members; if the folder is group-writable and setgid to the group, they can also update the files in it.
+
 ### Choosing the client directory
 
 The first of these that is set wins:

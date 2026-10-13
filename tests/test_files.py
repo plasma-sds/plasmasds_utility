@@ -1,5 +1,6 @@
 import logging
 import os
+import stat
 
 import pytest
 
@@ -94,7 +95,7 @@ def test_failed_create_is_a_path_error(home, monkeypatch):
     def refuse(*args, **kwargs):
         raise PermissionError("read-only directory")
 
-    monkeypatch.setattr(_files.tempfile, "mkstemp", refuse)
+    monkeypatch.setattr(_files, "_create", refuse)
     with pytest.raises(PathError, match="read-only directory"):
         with _files.writing(home / "a.bin"):
             pass
@@ -124,3 +125,35 @@ def test_make_parent_reports_a_file_in_the_way(home):
     (home / "file").write_text("x", encoding="utf-8")
     with pytest.raises(PathError, match="cannot create the directory"):
         _files.make_parent(home / "file" / "c.bin")
+
+
+posix_only = pytest.mark.skipif(os.name == "nt", reason="no POSIX permissions")
+
+
+def mode_of(path):
+    return stat.S_IMODE(path.stat().st_mode)
+
+
+@posix_only
+@pytest.mark.parametrize(
+    ("umask", "mode"), [(0o022, 0o644), (0o002, 0o664), (0o027, 0o640)]
+)
+def test_new_files_get_the_mode_of_any_new_file(home, umask, mode):
+    # tempfile would give 0o600, which a shared group folder cannot read (#25).
+    previous = os.umask(umask)
+    try:
+        with _files.writing(home / "a.bin") as partial:
+            partial.file.write(b"data")
+    finally:
+        os.umask(previous)
+    assert mode_of(home / "a.bin") == mode
+
+
+def test_temporary_names_are_retried_when_taken(home, monkeypatch):
+    tokens = iter(["0000", "0000", "1111"])
+    monkeypatch.setattr(_files.secrets, "token_hex", lambda n: next(tokens))
+    (home / ".a.bin.0000.part").write_bytes(b"someone else's")
+    with _files.writing(home / "a.bin") as partial:
+        partial.file.write(b"data")
+    assert (home / "a.bin").read_bytes() == b"data"
+    assert (home / ".a.bin.0000.part").read_bytes() == b"someone else's"
