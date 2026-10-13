@@ -158,7 +158,8 @@ def notice(text):
     """
     logger.info(text)
     if not quiet():
-        print(f"plasmasds_utility: {text}", file=sys.stderr, flush=True)
+        sys.stderr.write(f"plasmasds_utility: {text}\n")  # one write per line
+        sys.stderr.flush()
 
 
 def server_access():
@@ -491,14 +492,26 @@ def _stop_logging():
 _PROGRESS_SIZE = 50_000_000
 _STATUS_EVERY = 60  # seconds between the status lines of a large transfer
 _clock = time.monotonic  # replaced in the tests
+_hinted = False  # whether the command that follows the log was printed
 
 
-def _follow_hint(windows=os.name == "nt"):
-    """Return the command that shows the log file as it grows."""
-    path = log_dir() / LOG_FILE
-    if windows:
-        return f'Get-Content -Wait -Tail 20 "{path}"'
-    return f"tail -f {shlex.quote(str(path))}"
+def _follow_hint(windows=None):
+    """Return the command that shows the log file as it grows.
+
+    ``tail -F`` follows the file name, so it keeps going when the log rotates.
+    """
+    path = str(log_dir() / LOG_FILE)
+    if windows if windows is not None else _WINDOWS:
+        quoted = path.replace("'", "''")
+        return f"Get-Content -Wait -Tail 20 '{quoted}'"
+    return f"tail -F {shlex.quote(path)}"
+
+
+def _speed(per_second):
+    """Return a transfer speed for a message: 10.2 MB/s, or 420 kB/s below 1 MB/s."""
+    if per_second >= 1_000_000:
+        return f"{per_second / 1e6:.1f} MB/s"
+    return f"{per_second / 1e3:.0f} kB/s"
 
 
 def _duration(seconds):
@@ -515,12 +528,15 @@ def _duration(seconds):
 def progress(verb, name, total):
     """Report the progress of a transfer of 50 MB or more; return its callback.
 
-    When called, prints a start line (see :func:`notice`) with the size and the
-    command that follows the log file. The returned callback takes the bytes
-    transferred so far (and ignores a second argument, as paramiko passes the
-    total too). It logs a line at INFO each time another 10 % is done, and
-    every 60 seconds a status line (see :func:`notice`) with how much is done,
-    the average speed and the time left. Smaller transfers, and those of
+    When called, prints a start line (see :func:`notice`) with the size; the
+    first one in a process also gives the command that follows the log file.
+    The returned callback takes the bytes transferred so far (and ignores a
+    second argument, as paramiko passes the total too). It logs a line at INFO
+    each time another 10 % is done, and a status line (see :func:`notice`) with
+    how much is done, the average speed since the start, and the time left,
+    when at least 60 seconds have passed since the last one. The callback runs
+    only when data arrives, so a stalled transfer prints nothing until its
+    timeout ends the attempt (with a warning). Smaller transfers, and those of
     unknown size, report nothing. A retried transfer starts again from zero, so
     it reports again from its start line, with the speed of that attempt.
 
@@ -538,12 +554,14 @@ def progress(verb, name, total):
     callable
         ``callback(done, total=None)``.
     """
+    global _hinted
     if not total or total < _PROGRESS_SIZE:
         return lambda done, _total=None: None
-    notice(
-        f"{verb} {name} ({total // 1_000_000} MB); to follow the progress in the "
-        f"log: {_follow_hint()}"
-    )
+    start_line = f"{verb} {name} ({total // 1_000_000} MB)"
+    if not _hinted:
+        _hinted = True
+        start_line += f"; to follow the progress in the log: {_follow_hint()}"
+    notice(start_line)
     start = last = _clock()
     reported = 0  # tenths logged so far
 
@@ -563,15 +581,11 @@ def progress(verb, name, total):
         now = _clock()
         if now - last >= _STATUS_EVERY and done < total:
             last = now
-            speed = done / (now - start)  # bytes per second
-            left = (
-                f"about {_duration((total - done) / speed)} left"
-                if speed
-                else "stalled"
-            )
+            speed = done / (now - start)  # bytes per second; data has arrived
             notice(
                 f"{verb} {name}: {done // 1_000_000} of {total // 1_000_000} MB "
-                f"({done * 100 // total} %), {speed / 1e6:.1f} MB/s, {left}"
+                f"({done * 100 // total} %), {_speed(speed)}, about "
+                f"{_duration((total - done) / speed)} left"
             )
 
     return report

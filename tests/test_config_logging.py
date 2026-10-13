@@ -1,4 +1,5 @@
 import logging
+import shlex
 
 import pytest
 
@@ -121,9 +122,10 @@ def test_quiet_notice_only_logs(monkeypatch, capsys, caplog):
 
 @pytest.fixture
 def clock(monkeypatch):
-    """Set the time seen by progress() with clock.now."""
+    """Set the time seen by progress() with clock.now; give the hint again."""
     clock = type("Clock", (), {"now": 0.0})()
     monkeypatch.setattr(_config, "_clock", lambda: clock.now)
+    monkeypatch.setattr(_config, "_hinted", False)
     return clock
 
 
@@ -134,16 +136,33 @@ def test_progress_start_line_names_the_size_and_how_to_follow(clock, capsys):
     _config.progress("downloading", "big.h5", 1400 * MB)
     err = capsys.readouterr().err
     assert err.startswith("plasmasds_utility: downloading big.h5 (1400 MB); ")
-    assert "tail -f " in err or "Get-Content -Wait" in err
+    assert "tail -F " in err or "Get-Content -Wait" in err
     assert _config.LOG_FILE in err
 
 
-def test_follow_hint_on_windows_and_elsewhere():
-    path = _config.log_dir() / _config.LOG_FILE
+def test_progress_gives_the_follow_command_once(clock, capsys):
+    _config.progress("downloading", "a.h5", 100 * MB)
+    _config.progress("downloading", "b.h5", 100 * MB)
+    first, second = capsys.readouterr().err.splitlines()
+    assert "to follow the progress" in first
+    assert second == "plasmasds_utility: downloading b.h5 (100 MB)"
+
+
+def test_follow_hint_on_windows_and_elsewhere(monkeypatch, tmp_path):
+    folder = tmp_path / "it's a log"
+    monkeypatch.setattr(_config, "log_dir", lambda: folder)
+    path = str(folder / _config.LOG_FILE)
     assert _config._follow_hint(windows=True) == (
-        f'Get-Content -Wait -Tail 20 "{path}"'
+        "Get-Content -Wait -Tail 20 '" + path.replace("'", "''") + "'"
     )
-    assert _config._follow_hint(windows=False).startswith("tail -f ")
+    assert _config._follow_hint(windows=False) == f"tail -F {shlex.quote(path)}"
+
+
+def test_follow_hint_uses_the_platform(monkeypatch):
+    monkeypatch.setattr(_config, "_WINDOWS", True)
+    assert _config._follow_hint().startswith("Get-Content")
+    monkeypatch.setattr(_config, "_WINDOWS", False)
+    assert _config._follow_hint().startswith("tail -F")
 
 
 def test_progress_status_every_minute(clock, capsys):
@@ -154,19 +173,21 @@ def test_progress_status_every_minute(clock, capsys):
         report(done * MB)
     lines = capsys.readouterr().err.splitlines()
     assert lines == [
-        "plasmasds_utility: downloading big.h5: 60 of 200 MB (30 %), 1.0 MB/s, "
+        "plasmasds_utility: downloading big.h5: 60 of 200 MB (30 %), 984 kB/s, "
         "about 2 min left",
-        "plasmasds_utility: downloading big.h5: 120 of 200 MB (60 %), 1.0 MB/s, "
+        "plasmasds_utility: downloading big.h5: 120 of 200 MB (60 %), 960 kB/s, "
         "about 83 s left",
     ]
 
 
-def test_progress_status_says_when_nothing_arrives(clock, capsys):
+def test_progress_status_of_a_slow_transfer_in_kb(clock, capsys):
     report = _config.progress("uploading", "big.h5", 200 * MB)
     capsys.readouterr()
-    clock.now = 61
-    report(0)
-    assert capsys.readouterr().err.endswith("0 of 200 MB (0 %), 0.0 MB/s, stalled\n")
+    clock.now = 100
+    report(4 * MB)
+    assert capsys.readouterr().err.endswith(
+        "4 of 200 MB (2 %), 40 kB/s, about 82 min left\n"
+    )
 
 
 def test_short_transfer_prints_only_the_start_line(clock, capsys):
@@ -194,3 +215,16 @@ def test_quiet_progress_only_logs(clock, monkeypatch, capsys, caplog):
 )
 def test_duration(seconds, text):
     assert _config._duration(seconds) == text
+
+
+def test_quiet_keeps_warnings_on_stderr(monkeypatch, capsys):
+    monkeypatch.setenv("PLASMASDS_QUIET", "1")
+    _config.start_logging()
+    _config.logger.warning("something went wrong")
+    assert "something went wrong" in capsys.readouterr().err
+
+
+def test_speed():
+    assert _config._speed(10_200_000) == "10.2 MB/s"
+    assert _config._speed(1_000_000) == "1.0 MB/s"
+    assert _config._speed(984_000) == "984 kB/s"
