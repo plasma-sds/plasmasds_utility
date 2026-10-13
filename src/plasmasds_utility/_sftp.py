@@ -291,7 +291,6 @@ def download(
     ValueError
         If ``attempts`` is less than 1.
     """
-    _files.make_parent(target)
     _run(
         settings,
         remote,
@@ -320,7 +319,7 @@ def _run(settings, remote, action, verb, *, timeout, attempts, backoff, use_cach
     if _config.server_access() != "all":
         # Not remembered in _unavailable: the environment may change.
         raise AuthError(
-            f"not contacting the private server for {remote}: "
+            f"not contacting the server over SFTP for {remote}: "
             f"{_config.server_access_note()}"
         )
     server = _server(settings)
@@ -878,6 +877,7 @@ def _fetch(sftp, remote, target):
         if _server_file_error(remote, error) is None:
             raise
         raise _server_file_error(remote, error) from error
+    _files.make_parent(target)  # only once the server has the file
     with _files.writing(target) as partial:
         try:
             received = sftp.getfo(
