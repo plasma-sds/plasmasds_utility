@@ -587,7 +587,7 @@ def upload(
                     _Source(file, source),
                     str(temporary),
                     file_size=before.st_size,
-                    callback=_files.progress("uploading", remote, before.st_size),
+                    callback=_config.progress("uploading", remote, before.st_size),
                     confirm=True,
                 )
                 after = os.fstat(file.fileno())
@@ -888,7 +888,7 @@ def _fetch(sftp, remote, target):
                 # rest of the file is then read block by block while the requests
                 # still sent pile up unread (#33). Unbounded, a 1.1 GB download
                 # needed 65 MB of memory.
-                callback=_files.progress("downloading", remote, attributes.st_size),
+                callback=_config.progress("downloading", remote, attributes.st_size),
             )
         except OSError as error:  # opening the file can fail after stat worked
             if _server_file_error(remote, error) is None:

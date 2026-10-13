@@ -68,3 +68,28 @@ def test_unusable_log_directory_is_a_config_error(home, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(blocker))
     with pytest.raises(ConfigError, match="cannot create the log directory"):
         _config.start_logging()
+
+
+def progress_lines(caplog):
+    return [r.getMessage() for r in caplog.records if " %" in r.getMessage()]
+
+
+def test_progress_is_logged_every_tenth(caplog, monkeypatch):
+    caplog.set_level(logging.INFO, logger="plasmasds_utility")
+    monkeypatch.setattr(_config, "_PROGRESS_SIZE", 100)
+    report = _config.progress("downloading", "x.h5", 10_000_000)
+    for done in range(0, 10_000_001, 250_000):
+        report(done, 10_000_000)
+    assert progress_lines(caplog) == [
+        f"downloading x.h5: {p} % ({p // 10} of 10 MB)" for p in range(10, 101, 10)
+    ]
+
+
+def test_progress_skips_small_and_unknown_sizes(caplog):
+    caplog.set_level(logging.INFO, logger="plasmasds_utility")
+    small = _config.progress("downloading", "x.h5", _config._PROGRESS_SIZE - 1)
+    unknown = _config.progress("downloading", "x.h5", None)
+    for done in (0, 1000, _config._PROGRESS_SIZE):
+        small(done)
+        unknown(done)
+    assert progress_lines(caplog) == []

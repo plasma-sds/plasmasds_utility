@@ -456,3 +456,50 @@ def _stop_logging():
         handler.close()
     _log_handlers.clear()
     logger.setLevel(logging.NOTSET)
+
+
+# Transfers at least this large (bytes) log their progress; smaller ones log only
+# when done.
+_PROGRESS_SIZE = 50_000_000
+
+
+def progress(verb, name, total):
+    """Return a callback that logs the progress of a large transfer at INFO.
+
+    The callback takes the bytes transferred so far (and ignores a second
+    argument, as paramiko passes the total too); it logs at most once per 10 %,
+    when another 10 % is done, if ``total`` is at least 50 MB.
+
+    Parameters
+    ----------
+    verb : str
+        What is done, for the message, for example ``"downloading"``.
+    name : object
+        What is transferred, for the message.
+    total : int or None
+        The size in bytes; None (unknown) logs nothing.
+
+    Returns
+    -------
+    callable
+        ``callback(done, total=None)``.
+    """
+    reported = 0  # tenths logged so far
+
+    def report(done, _total=None):
+        nonlocal reported
+        if not total or total < _PROGRESS_SIZE:
+            return
+        tenths = min(done * 10 // total, 10)
+        if tenths > reported:
+            reported = tenths
+            logger.info(
+                "%s %s: %d %% (%d of %d MB)",
+                verb,
+                name,
+                tenths * 10,
+                done // 1_000_000,
+                total // 1_000_000,
+            )
+
+    return report

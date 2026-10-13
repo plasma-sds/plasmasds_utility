@@ -5,7 +5,7 @@ import types
 
 import pytest
 
-from plasmasds_utility import PathError, TransferError, _files, _https
+from plasmasds_utility import PathError, TransferError, _config, _files, _https
 
 LAST_MODIFIED = "Fri, 23 Feb 2018 21:48:01 GMT"
 TIMESTAMP = 1519422481
@@ -36,7 +36,7 @@ def test_download_writes_the_file_with_the_server_mtime(http_server, home, sleep
 
 def test_large_download_logs_progress(http_server, home, monkeypatch, caplog):
     caplog.set_level(logging.INFO, logger="plasmasds_utility")
-    monkeypatch.setattr(_files, "_PROGRESS_SIZE", 1)
+    monkeypatch.setattr(_config, "_PROGRESS_SIZE", 1)
     body = b"x" * (3 * 1024 * 1024)
     http_server.serve("/big.bin", {"body": body})
     url = http_server.url("/big.bin")

@@ -81,7 +81,7 @@ def test_download_prefetches_to_the_end_and_logs_progress(
     # A bounded prefetch stopped prefetching for good after the first batch of
     # requests and read the rest block by block (#33): check it stays on.
     caplog.set_level(logging.INFO, logger="plasmasds_utility")
-    monkeypatch.setattr(_files, "_PROGRESS_SIZE", 1)
+    monkeypatch.setattr(_config, "_PROGRESS_SIZE", 1)
     read = paramiko.SFTPFile._read
     stopped = []
 
