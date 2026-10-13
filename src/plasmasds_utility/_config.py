@@ -521,7 +521,8 @@ def progress(verb, name, total):
     total too). It logs a line at INFO each time another 10 % is done, and
     every 60 seconds a status line (see :func:`notice`) with how much is done,
     the average speed and the time left. Smaller transfers, and those of
-    unknown size, report nothing.
+    unknown size, report nothing. A retried transfer starts again from zero, so
+    it reports again from its start line, with the speed of that attempt.
 
     Parameters
     ----------

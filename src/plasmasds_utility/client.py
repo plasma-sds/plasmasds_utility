@@ -391,7 +391,8 @@ class DataClient:
         of the private server, such as a timeout, raises, so public data never
         silently replaces private data. Such a fallback is announced: the first in
         a process with a warning, every one in the log file, and all of them in a
-        summary at exit and in :func:`show_public_fallbacks`.
+        summary at exit (in the log only if ``PLASMASDS_QUIET`` is set) and in
+        :func:`show_public_fallbacks`.
 
         ``update`` decides what happens to a file that is already on disk; a file
         that is not on disk is always downloaded:
@@ -404,7 +405,8 @@ class DataClient:
         - ``"force"``: the local copy is downloaded again regardless, for example
           when it is damaged.
 
-        The first call in a process prints these options. If a requested check
+        The first call in a process prints these options to stderr (or only logs
+        them, if ``PLASMASDS_QUIET`` is set). If a requested check
         cannot be done, the local copy is kept and :class:`TransferError` is
         raised. Without a local copy, the private
         server is asked even about a file it was found not to have earlier in
