@@ -55,6 +55,9 @@ _sessions = {}  # (host, port, user) -> (SSHClient, SFTPClient)
 _unavailable = {}  # (host, port, user) -> AuthError
 _not_on_server = set()  # ((host, port, user), remote path) known to be missing
 _KEEPALIVE = 60  # seconds between SSH keepalive messages on an idle session
+# Read requests a download keeps in flight (32 kB each). paramiko sends one for every
+# block of a file at once by default: about 43,000 for a 1.4 GB file.
+_PREFETCH = 64
 
 
 def _server(settings):
@@ -579,7 +582,11 @@ def upload(
             try:
                 before = os.fstat(file.fileno())
                 attributes = sftp.putfo(
-                    _Source(file, source), str(temporary), confirm=True
+                    _Source(file, source),
+                    str(temporary),
+                    file_size=before.st_size,
+                    callback=_files.progress("uploading", remote, before.st_size),
+                    confirm=True,
                 )
                 after = os.fstat(file.fileno())
                 if (before.st_size, before.st_mtime_ns) != (
@@ -870,7 +877,12 @@ def _fetch(sftp, remote, target):
         raise _server_file_error(remote, error) from error
     with _files.writing(target) as partial:
         try:
-            received = sftp.getfo(str(remote), partial.file)
+            received = sftp.getfo(
+                str(remote),
+                partial.file,
+                callback=_files.progress("downloading", remote, attributes.st_size),
+                max_concurrent_prefetch_requests=_PREFETCH,
+            )
         except OSError as error:  # opening the file can fail after stat worked
             if _server_file_error(remote, error) is None:
                 raise

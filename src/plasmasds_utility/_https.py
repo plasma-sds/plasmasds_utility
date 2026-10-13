@@ -6,7 +6,6 @@ or interrupted transfer never leaves a partial file under the target name.
 
 import email.utils
 import http.client
-import shutil
 import time
 import urllib.error
 import urllib.request
@@ -68,7 +67,10 @@ def _fetch_once(url, target, timeout):
         with urllib.request.urlopen(url, timeout=timeout) as response:
             expected = _content_length(response.headers, url)
             last_modified = response.headers.get("Last-Modified")
-            shutil.copyfileobj(response, partial.file, _CHUNK)
+            report = _files.progress("downloading", url, expected)
+            while chunk := response.read(_CHUNK):
+                partial.file.write(chunk)
+                report(partial.file.tell())
         received = partial.file.tell()
         # A server that closes early gives a short read, not an exception.
         if expected is not None and received != expected:

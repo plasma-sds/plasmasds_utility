@@ -1,4 +1,6 @@
 import io
+import logging
+import os
 import types
 from pathlib import Path, PurePosixPath
 
@@ -6,7 +8,7 @@ import paramiko
 import pytest
 from paramiko.sftp import CMD_EXTENDED
 
-from plasmasds_utility import PathError, TransferError, _config, _sftp
+from plasmasds_utility import PathError, TransferError, _config, _files, _sftp
 
 
 @pytest.fixture
@@ -477,3 +479,13 @@ def test_replacing_with_another_size_does_not_warn(existing, source, caplog):
     source.write_bytes(b"newer, longer data")
     upload(source, archive_to=ARCHIVE)
     assert "same size" not in caplog.text
+
+
+def test_large_upload_logs_progress(server, source, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger="plasmasds_utility")
+    monkeypatch.setattr(_files, "_PROGRESS_SIZE", 1)
+    source.write_bytes(os.urandom(1024 * 1024))
+    upload(source)
+    assert f"uploading {REMOTE}: 100 % (1 of 1 MB)" in [
+        r.getMessage() for r in caplog.records
+    ]

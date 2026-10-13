@@ -75,6 +75,31 @@ def test_large_file_is_streamed_intact(sftp_server, tmp_path, home):
     assert target.read_bytes() == body
 
 
+def test_download_bounds_prefetch_and_logs_progress(
+    sftp_server, tmp_path, home, monkeypatch, caplog
+):
+    caplog.set_level(logging.INFO, logger="plasmasds_utility")
+    monkeypatch.setattr(_files, "_PROGRESS_SIZE", 1)
+    getfo = paramiko.SFTPClient.getfo
+    limits = []
+
+    def spy(sftp, *args, **kwargs):
+        limits.append(kwargs.get("max_concurrent_prefetch_requests"))
+        return getfo(sftp, *args, **kwargs)
+
+    monkeypatch.setattr(paramiko.SFTPClient, "getfo", spy)
+    body = os.urandom(1024 * 1024)
+    path = tmp_path / "server" / Path(*REMOTE.parts)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(body)
+    download(home / "x.h5")
+    assert (home / "x.h5").read_bytes() == body
+    assert limits == [_sftp._PREFETCH]
+    messages = [r.getMessage() for r in caplog.records]
+    assert f"downloading {REMOTE}: 50 % (0 of 1 MB)" in messages
+    assert f"downloading {REMOTE}: 100 % (1 of 1 MB)" in messages
+
+
 def test_missing_file_is_not_retried(sftp_server, home, sleeps):
     with pytest.raises(TransferError, match="is not on the private server"):
         download(home / "x.h5")

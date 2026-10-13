@@ -34,6 +34,19 @@ def test_download_writes_the_file_with_the_server_mtime(http_server, home, sleep
     assert sleeps == []
 
 
+def test_large_download_logs_progress(http_server, home, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger="plasmasds_utility")
+    monkeypatch.setattr(_files, "_PROGRESS_SIZE", 1)
+    body = b"x" * (3 * 1024 * 1024)
+    http_server.serve("/big.bin", {"body": body})
+    url = http_server.url("/big.bin")
+    target = _https.download(url, home / "big.bin")
+    assert target.read_bytes() == body
+    messages = [r.getMessage() for r in caplog.records]
+    assert f"downloading {url}: 100 % (3 of 3 MB)" in messages
+    assert 1 <= sum(" % (" in m for m in messages) <= 10  # at most one per tenth
+
+
 def test_download_creates_missing_directories(http_server, home):
     http_server.serve("/a.txt", {"body": b"x"})
     target = home / "deep" / "er" / "a.txt"
