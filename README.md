@@ -58,6 +58,14 @@ def rates(element):
 ```
 
 The client's folders on the server are created by its first upload.
+
+The environment variable `PLASMASDS_SERVER_ACCESS` limits which servers are contacted:
+
+- `all` (the default): both, as described below.
+- `public`: only the public server, over HTTPS; `get(key)` then takes public data only.
+  This is the default when the `CI` variable is set, as in GitHub Actions, so a client's tests in CI never try SFTP and need no setup.
+- `local`: no server at all; `get(key)` returns local copies only, and a file that is not on disk raises an error at once.
+  Set it on machines without network, for example in cluster job scripts: `PLASMASDS_SERVER_ACCESS=local python run.py`.
 Runnable examples for a terminal and for a notebook are in [`examples/`](https://github.com/plasma-sds/plasmasds_utility/tree/master/examples).
 
 ## Getting data
@@ -291,6 +299,8 @@ The usual failures:
 - **A timeout or "Unable to connect to port 72", for private data only:** the network blocks the SSH port; try another network or a VPN.
   Public data uses HTTPS, which goes through a proxy set in `HTTPS_PROXY`; SFTP does not.
 - **"CERTIFICATE_VERIFY_FAILED" for public data:** a network that inspects HTTPS traffic replaces the server's certificate; ask the network's admins, or use another network.
+- **"not contacting the private server"** or **"no server is contacted":** `PLASMASDS_SERVER_ACCESS` is `public` or `local`, or `CI` is set; the message says which.
+  Unset it, or set it to `all`, to use the servers.
 - **"the test file … is missing":** the server was reached; tell the server's admins.
   (For them: the check needs `plasmasds_utility/test/connection_test.txt` in both trees, with the content `plasmasds_utility connection test`; the tests use the same folder for files of their own, which they remove themselves.)
 
