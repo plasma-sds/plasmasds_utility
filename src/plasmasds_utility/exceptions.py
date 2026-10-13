@@ -23,3 +23,12 @@ class TransferError(PlasmasdsUtilityError):
 
 class AuthError(TransferError):
     """SSH authentication or host key verification failed."""
+
+
+class AlreadyOnServer(TransferError):
+    """An upload would replace a file on the server without archiving it.
+
+    Raised by :meth:`DataClient.upload` when the key is already on the server and
+    no ``archive_to`` is given; nothing was sent. A client that uploads many files
+    can catch it to skip those already up.
+    """

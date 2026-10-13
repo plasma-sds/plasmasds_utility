@@ -3,7 +3,7 @@ import os
 import pytest
 
 import plasmasds_utility.client as client_module
-from plasmasds_utility import DataClient, PathError, TransferError
+from plasmasds_utility import AlreadyOnServer, DataClient, PathError
 
 OLD = 1_500_000_000
 
@@ -85,7 +85,7 @@ def test_upload_refuses_to_replace_without_archiving(server):
     client = DataClient("renate-od")
     local = client.local_path("a.h5")
     place(local, b"new")
-    with pytest.raises(TransferError, match="already on the server"):
+    with pytest.raises(AlreadyOnServer, match="already on the server"):
         client.upload("a.h5")
     assert (tree / "a.h5").read_bytes() == b"old"
     assert local.stat().st_mtime == OLD

@@ -38,6 +38,7 @@ from paramiko.sftp import CMD_EXTENDED
 
 from plasmasds_utility import _config, _files
 from plasmasds_utility.exceptions import (
+    AlreadyOnServer,
     AuthError,
     ConfigError,
     PathError,
@@ -563,7 +564,7 @@ def upload(
                 "the server"
             )
         if existed and archive_to is None:
-            raise TransferError(
+            raise AlreadyOnServer(
                 f"{remote} is already on the server; an upload replaces a file only "
                 "when the old one is archived (archive_to)"
             )

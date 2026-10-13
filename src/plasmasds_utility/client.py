@@ -804,11 +804,15 @@ class DataClient:
             If ``key`` or ``archive_to`` is invalid, they are the same key, or the
             local copy is missing, cannot be read, or changes during the upload.
         TransferError
-            If the file is on the server and ``archive_to`` is not given, something
-            is at ``archive_to`` already, a folder is at ``key``, the server refuses
+            If something is at ``archive_to`` already, a folder is at ``key``, the
+            server refuses
             a step, or the upload fails after the retries. The message says which
             step failed, whether the file on the server is unchanged, and what may
             be left on the server.
+        AlreadyOnServer
+            If the file is on the server and ``archive_to`` is not given; nothing
+            was sent. A :class:`TransferError`, so a client uploading many files
+            can catch it to skip those already up.
         AuthError
             If you have no SSH access to the server (see :meth:`get`); uploads of
             public data need it too. Also at once, without connecting, if

@@ -19,8 +19,8 @@ import pytest
 
 import plasmasds_utility
 from plasmasds_utility import (
+    AlreadyOnServer,
     DataClient,
-    TransferError,
     _config,
     _https,
     _paths,
@@ -127,7 +127,7 @@ def test_upload_to_the_data_server(home, server_files):
     size, mtime = _sftp.stat(settings, remote)
     assert size == 5
     assert local.stat().st_mtime == mtime
-    with pytest.raises(TransferError, match="already on the server"):
+    with pytest.raises(AlreadyOnServer, match="already on the server"):
         client.upload(key)
     local.write_bytes(b"second")
     client.upload(key, archive_to=old)

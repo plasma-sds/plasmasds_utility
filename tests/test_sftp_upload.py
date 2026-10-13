@@ -8,7 +8,7 @@ import paramiko
 import pytest
 from paramiko.sftp import CMD_EXTENDED
 
-from plasmasds_utility import PathError, TransferError, _config, _sftp
+from plasmasds_utility import AlreadyOnServer, PathError, TransferError, _config, _sftp
 
 
 @pytest.fixture
@@ -152,7 +152,7 @@ def test_upload_creates_directories_and_the_file(server, source, sleeps):
 
 def test_upload_never_replaces_a_file_without_archiving(existing, source):
     stub, local = existing
-    with pytest.raises(TransferError, match="already on the server.*archive_to"):
+    with pytest.raises(AlreadyOnServer, match="already on the server.*archive_to"):
         upload(source)
     assert local(REMOTE).read_bytes() == b"old data"
     assert stub.operations["write"] == 0
@@ -172,8 +172,9 @@ def test_upload_refuses_an_existing_archive_name(existing, source):
     stub, local = existing
     local(ARCHIVE).parent.mkdir(parents=True)
     local(ARCHIVE).write_bytes(b"older data")
-    with pytest.raises(TransferError, match=f"{ARCHIVE} is already on the server"):
+    with pytest.raises(TransferError, match=f"{ARCHIVE} is already on the server") as e:
         upload(source, archive_to=ARCHIVE)
+    assert not isinstance(e.value, AlreadyOnServer)  # the upload itself is not done
     assert local(ARCHIVE).read_bytes() == b"older data"
     assert local(REMOTE).read_bytes() == b"old data"
     assert stub.operations["write"] == 0
