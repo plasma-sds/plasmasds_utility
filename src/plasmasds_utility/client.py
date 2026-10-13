@@ -228,7 +228,8 @@ def _local_files(tree):
     Temporary files, anything hidden (including inside hidden directories) and
     names that are not valid keys (with a warning) are left out. Symbolic links
     to files and to folders are followed, as by :meth:`DataClient.get`; a folder
-    that leads back to one of its own parents (a link loop) is not walked again.
+    that leads back to one of its own parents, or above them (a link loop, or a
+    link to the home folder), is skipped.
     """
     if not tree.is_dir():
         return []
@@ -256,12 +257,20 @@ def _local_files(tree):
 
 
 def _loops(folder, tree):
-    """Return whether folder is, after links, one of its own parents below tree."""
+    """Return whether folder, after links, contains one of its own parents.
+
+    So a link back to a parent, or to a folder above the tree (such as the
+    home folder), is caught before anything under it is listed.
+    """
     real = os.path.realpath(folder)
-    return any(
-        os.path.realpath(tree / parent) == real
-        for parent in folder.relative_to(tree).parents
-    )
+    for parent in folder.relative_to(tree).parents:
+        above = os.path.realpath(tree / parent)
+        try:
+            if os.path.commonpath([above, real]) == real:
+                return True
+        except ValueError:  # on different drives (Windows)
+            continue
+    return False
 
 
 class DataClient:
