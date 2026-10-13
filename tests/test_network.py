@@ -140,6 +140,10 @@ def test_upload_to_the_data_server(home, server_files):
     client.upload(key, private=False)
     size, _ = _https.head(_paths.public_url(settings, client.prefix, key))
     assert size == 6
+    # on_server asks both servers (#44).
+    assert client.on_server(key) is True
+    assert client.on_server(key, private=False) is True
+    assert client.on_server(old + ".missing") is False
 
 
 @pytest.mark.network
