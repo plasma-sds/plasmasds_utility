@@ -110,6 +110,8 @@ The environment is managed with [pixi](https://pixi.sh); its configuration lives
 
 - **Plan steps:** `step/<issue>-<n>` (for example `step/6-1`) on the merge commit in `development`, created after the owner has merged the step.
 - **Releases:** `vMAJOR.MINOR.PATCH` ([semver](https://semver.org)) on `master`, after an owner has merged the release into `master`.
+  The version in `src/plasmasds_utility/__init__.py` must match the tag; pushing the tag publishes the release to PyPI (`.github/workflows/publish.yml`, trusted publishing from the `pypi` environment), and the workflow refuses a tag that does not match or is not on `master`.
+  After a release, `development` moves to the next version with `.dev0` (for example `0.2.0.dev0`), in a pull request.
 - Tags are annotated and signed: `git tag -s <tag> -m "<summary>" <commit>`, then `git push origin <tag>`.
 
 ## 5. Review lens
