@@ -41,6 +41,8 @@ Decisions already made (do not re-open them without an owner):
 - `PLASMASDS_SERVER_ACCESS` limits which servers are contacted, not which local copies are used: `all` (default), `public` (only HTTPS; the default when `CI` is set, so a client's CI never contacts the SFTP server) or `local` (no server; set explicitly, for example in cluster jobs).
   Public data used for want of private data is announced as a fallback in every mode.
   (Decided 2026-10-13 on #34.)
+- Notices (the first-get notice, the public-fallback summary at exit, the progress of transfers of 50 MB or more: a start line and a status line every minute) go to stderr and the log; `PLASMASDS_QUIET` keeps them in the log only. Warnings and errors always go to stderr.
+  (Decided 2026-10-13 on #35 and #40.)
 - Failures are loud and specific: package-specific exception classes, messages that say where the failure happened, and a rotating log file.
 
 ### Commands
