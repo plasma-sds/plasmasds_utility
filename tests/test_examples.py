@@ -8,6 +8,7 @@ public half uses the real server.
 """
 
 import json
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -15,14 +16,23 @@ from pathlib import Path
 import nbclient
 import nbformat
 import pytest
+from conftest import write_config
 
 EXAMPLES = Path(__file__).parents[1] / "examples"
 
 
 @pytest.fixture
 def public_access(home, monkeypatch):
-    """Run as a client's CI does: public server access."""
+    """Run as a client's CI does: public server access.
+
+    SFTP is also pointed at a closed port on this computer, so that even if the
+    variable stopped reaching the examples, CI could not contact the server.
+    """
     monkeypatch.setenv("PLASMASDS_SERVER_ACCESS", "public")
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    write_config(host="127.0.0.1", port=port)
 
 
 @pytest.mark.network
