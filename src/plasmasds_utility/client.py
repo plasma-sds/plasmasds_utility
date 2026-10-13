@@ -810,9 +810,9 @@ class DataClient:
             step failed, whether the file on the server is unchanged, and what may
             be left on the server.
         AlreadyOnServer
-            If the file is on the server and ``archive_to`` is not given; nothing
-            was sent. A :class:`TransferError`, so a client uploading many files
-            can catch it to skip those already up.
+            If the file is on the server and ``archive_to`` is not given; the file
+            was not put in place. A :class:`TransferError`, so a client uploading
+            many files can catch it to skip those already up.
         AuthError
             If you have no SSH access to the server (see :meth:`get`); uploads of
             public data need it too. Also at once, without connecting, if
@@ -868,8 +868,14 @@ class DataClient:
 
         Private data is asked over SFTP (a ``stat``, which needs an SSH key),
         public data over HTTPS (a ``HEAD`` request, as people downloading it see
-        it). The server is always asked: no earlier answer is reused. Whether a
-        local copy exists is a different question: ``local_path(key).is_file()``.
+        it). The question is about files: a folder at the key answers True over
+        SFTP but usually raises over HTTPS, where the web server refuses it.
+
+        The server is always asked: no earlier answer is reused. A False answer
+        is remembered like any missing file, so a later :meth:`get` of the key in
+        this process does not ask again unless ``update="if_newer"`` is given (an
+        :meth:`upload` of the key clears it). Whether a local copy exists is a
+        different question: ``local_path(key).is_file()``.
 
         Parameters
         ----------

@@ -29,6 +29,8 @@ class AlreadyOnServer(TransferError):
     """An upload would replace a file on the server without archiving it.
 
     Raised by :meth:`DataClient.upload` when the key is already on the server and
-    no ``archive_to`` is given; nothing was sent. A client that uploads many files
-    can catch it to skip those already up.
+    no ``archive_to`` is given; the file was not put in place. A client that
+    uploads many files can catch it to skip those already up. A file that
+    appears on the server *during* an upload gives a plain :class:`TransferError`
+    instead, as the other upload may not be complete.
     """
