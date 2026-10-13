@@ -67,7 +67,7 @@ def _fetch_once(url, target, timeout):
         with urllib.request.urlopen(url, timeout=timeout) as response:
             expected = _content_length(response.headers, url)
             last_modified = response.headers.get("Last-Modified")
-            report = _files.progress("downloading", url, expected)
+            report = _config.progress("downloading", url, expected)
             done = 0
             while chunk := response.read(_CHUNK):
                 partial.file.write(chunk)

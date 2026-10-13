@@ -134,7 +134,16 @@ Otherwise users' checks see their copy as newer and keep it.
 ### Large files
 
 Transfers stream to and from disk: downloading a 1.1 GB file over SFTP took under 70 MB of memory in a test.
-The progress of a transfer of 50 MB or more is written to the [log](#the-log) every 10 %.
+A transfer of 50 MB or more prints when it starts, with its size (and, the first time, the command that follows the [log](#the-log)), and then, while data arrives, a line at least a minute apart with how much is done, the average speed and the time left:
+
+```text
+plasmasds_utility: downloading private_html/bolometer/aug-axuv/raytransfer/raytransfer_S16_refl.h5 (1400 MB); to follow the progress in the log: tail -F /home/me/.local/state/plasmasds/plasmasds.log
+plasmasds_utility: downloading private_html/bolometer/aug-axuv/raytransfer/raytransfer_S16_refl.h5: 612 of 1400 MB (43 %), 10.2 MB/s, about 77 s left
+```
+
+On Windows the command is `Get-Content -Wait -Tail 20 '<log file>'`, in PowerShell.
+The log also gets a line every 10 %.
+A transfer that stops receiving data fails after 30 seconds without data and is tried again, with a warning.
 A transfer that fails starts again from the beginning, up to three times; resuming is planned in [#22](https://github.com/plasma-sds/plasmasds_utility/issues/22).
 Processes that ask for the same missing file at the same time each download it, so when many processes run in parallel, get the files they need once before starting them.
 
@@ -264,7 +273,9 @@ An unknown setting is ignored with a warning, so a file written by a newer versi
 ### The log
 
 The utility logs what it does to `plasmasds.log` (rotated at 1 MB, three old files kept).
-Warnings and errors are also printed to stderr.
+Warnings and errors are also printed to stderr, and so are a few notices: the first `get()` in a session explains its options, a summary at exit lists the public fallbacks, and large transfers show their progress.
+To keep the notices in the log only, for example when many processes run in parallel, set the environment variable `PLASMASDS_QUIET` to anything but empty, `0` or `false` (for example `1`); warnings and errors are still printed.
+This concerns the utility's own output: a program that sends all log messages to the terminal itself, for example with `logging.basicConfig(level=logging.INFO)`, still shows them.
 
 ## Troubleshooting
 

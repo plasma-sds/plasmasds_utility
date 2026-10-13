@@ -31,6 +31,9 @@ The packaged ``working_dirs`` is always empty; it is there so that the user's
 import json
 import logging
 import os
+import shlex
+import sys
+import time
 import tomllib
 from importlib import resources
 from logging.handlers import RotatingFileHandler
@@ -128,9 +131,35 @@ def env_data_dir():
 SERVER_ACCESS = ("all", "public", "local")
 
 
+def _flag(name):
+    """Return whether an environment variable is set to anything but 0 or false."""
+    return os.environ.get(name, "").strip().lower() not in ("", "0", "false")
+
+
 def _ci():
     """Return whether this runs in CI (``CI`` set, as in GitHub Actions, GitLab)."""
-    return os.environ.get("CI", "").lower() not in ("", "0", "false")
+    return _flag("CI")
+
+
+def quiet():
+    """Return whether notices go to the log only (``PLASMASDS_QUIET`` is set).
+
+    Read on every call; any value but empty, ``0`` or ``false`` counts.
+    """
+    return _flag("PLASMASDS_QUIET")
+
+
+def notice(text):
+    """Log a notice at INFO and print it to stderr, unless :func:`quiet`.
+
+    For messages that inform rather than warn (the first-get notice, the
+    public-fallback summary at exit, the progress of large transfers);
+    warnings and errors are always printed.
+    """
+    logger.info(text)
+    if not quiet():
+        sys.stderr.write(f"plasmasds_utility: {text}\n")  # one write per line
+        sys.stderr.flush()
 
 
 def server_access():
@@ -456,3 +485,107 @@ def _stop_logging():
         handler.close()
     _log_handlers.clear()
     logger.setLevel(logging.NOTSET)
+
+
+# Transfers at least this large (bytes) report their progress; smaller ones log only
+# when done.
+_PROGRESS_SIZE = 50_000_000
+_STATUS_EVERY = 60  # seconds between the status lines of a large transfer
+_clock = time.monotonic  # replaced in the tests
+_hinted = False  # whether the command that follows the log was printed
+
+
+def _follow_hint(windows=None):
+    """Return the command that shows the log file as it grows.
+
+    ``tail -F`` follows the file name, so it keeps going when the log rotates.
+    """
+    path = str(log_dir() / LOG_FILE)
+    if windows if windows is not None else _WINDOWS:
+        quoted = path.replace("'", "''")
+        return f"Get-Content -Wait -Tail 20 '{quoted}'"
+    return f"tail -F {shlex.quote(path)}"
+
+
+def _speed(per_second):
+    """Return a transfer speed for a message: 10.2 MB/s, or 420 kB/s below 1 MB/s."""
+    if per_second >= 1_000_000:
+        return f"{per_second / 1e6:.1f} MB/s"
+    return f"{per_second / 1e3:.0f} kB/s"
+
+
+def _duration(seconds):
+    """Return a rough, readable duration: 40 s, 12 min, 2 h 5 min."""
+    seconds = round(seconds)
+    if seconds < 90:
+        return f"{seconds} s"
+    minutes = round(seconds / 60)
+    if minutes < 90:
+        return f"{minutes} min"
+    return f"{minutes // 60} h {minutes % 60} min"
+
+
+def progress(verb, name, total):
+    """Report the progress of a transfer of 50 MB or more; return its callback.
+
+    When called, prints a start line (see :func:`notice`) with the size; the
+    first one in a process also gives the command that follows the log file.
+    The returned callback takes the bytes transferred so far (and ignores a
+    second argument, as paramiko passes the total too). It logs a line at INFO
+    each time another 10 % is done, and a status line (see :func:`notice`) with
+    how much is done, the average speed since the start, and the time left,
+    when at least 60 seconds have passed since the last one. The callback runs
+    only when data arrives, so a stalled transfer prints nothing until its
+    timeout ends the attempt (with a warning). Smaller transfers, and those of
+    unknown size, report nothing. A retried transfer starts again from zero, so
+    it reports again from its start line, with the speed of that attempt.
+
+    Parameters
+    ----------
+    verb : str
+        What is done, for the messages, for example ``"downloading"``.
+    name : object
+        What is transferred, for the messages.
+    total : int or None
+        The size in bytes, or None if unknown.
+
+    Returns
+    -------
+    callable
+        ``callback(done, total=None)``.
+    """
+    global _hinted
+    if not total or total < _PROGRESS_SIZE:
+        return lambda done, _total=None: None
+    start_line = f"{verb} {name} ({total // 1_000_000} MB)"
+    if not _hinted:
+        _hinted = True
+        start_line += f"; to follow the progress in the log: {_follow_hint()}"
+    notice(start_line)
+    start = last = _clock()
+    reported = 0  # tenths logged so far
+
+    def report(done, _total=None):
+        nonlocal reported, last
+        tenths = min(done * 10 // total, 10)
+        if tenths > reported:
+            reported = tenths
+            logger.info(
+                "%s %s: %d %% (%d of %d MB)",
+                verb,
+                name,
+                tenths * 10,
+                done // 1_000_000,
+                total // 1_000_000,
+            )
+        now = _clock()
+        if now - last >= _STATUS_EVERY and done < total:
+            last = now
+            speed = done / (now - start)  # bytes per second; data has arrived
+            notice(
+                f"{verb} {name}: {done // 1_000_000} of {total // 1_000_000} MB "
+                f"({done * 100 // total} %), {_speed(speed)}, about "
+                f"{_duration((total - done) / speed)} left"
+            )
+
+    return report

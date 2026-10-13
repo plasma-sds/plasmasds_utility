@@ -5,7 +5,7 @@ import types
 
 import pytest
 
-from plasmasds_utility import PathError, TransferError, _files, _https
+from plasmasds_utility import PathError, TransferError, _config, _files, _https
 
 LAST_MODIFIED = "Fri, 23 Feb 2018 21:48:01 GMT"
 TIMESTAMP = 1519422481
@@ -34,9 +34,9 @@ def test_download_writes_the_file_with_the_server_mtime(http_server, home, sleep
     assert sleeps == []
 
 
-def test_large_download_logs_progress(http_server, home, monkeypatch, caplog):
+def test_large_download_logs_progress(http_server, home, monkeypatch, caplog, capsys):
     caplog.set_level(logging.INFO, logger="plasmasds_utility")
-    monkeypatch.setattr(_files, "_PROGRESS_SIZE", 1)
+    monkeypatch.setattr(_config, "_PROGRESS_SIZE", 1)
     body = b"x" * (3 * 1024 * 1024)
     http_server.serve("/big.bin", {"body": body})
     url = http_server.url("/big.bin")
@@ -45,6 +45,7 @@ def test_large_download_logs_progress(http_server, home, monkeypatch, caplog):
     messages = [r.getMessage() for r in caplog.records]
     assert f"downloading {url}: 100 % (3 of 3 MB)" in messages
     assert 1 <= sum(" % (" in m for m in messages) <= 10  # at most one per tenth
+    assert f"plasmasds_utility: downloading {url} (3 MB)" in capsys.readouterr().err
 
 
 def test_download_creates_missing_directories(http_server, home):

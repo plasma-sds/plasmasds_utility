@@ -1120,3 +1120,16 @@ def test_check_updates_after_a_failed_listing_checks_the_rest(servers):
     with pytest.raises(TransferError, match=r"(?s)bad/a\.h5: .*is denied") as error:
         client.check_updates()
     assert error.value.updated == [client.local_path("ok/b.h5")]
+
+
+def test_quiet_silences_the_notice_and_the_exit_summary(home, monkeypatch, capsys):
+    monkeypatch.setenv("PLASMASDS_QUIET", "1")
+    client = DataClient("renate-od")
+    place(client.local_path("a.h5"), b"mine")
+    client.get("a.h5")
+    client_module._fallbacks[("renate-od", "b.h5")] = "a reason"
+    client_module._summary_at_exit()
+    assert capsys.readouterr().err == ""
+    log = (_config.log_dir() / _config.LOG_FILE).read_text(encoding="utf-8")
+    assert 'update="never"' in log
+    assert "renate-od: b.h5 (a reason)" in log
