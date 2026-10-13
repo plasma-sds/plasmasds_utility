@@ -26,9 +26,11 @@ def test_the_variable_wins_over_ci(monkeypatch, value):
     monkeypatch.setenv("CI", "true")
     monkeypatch.setenv("PLASMASDS_SERVER_ACCESS", value)
     assert _config.server_access() == value
-    assert _config.server_access_note() == (
-        f"server access is {value} (PLASMASDS_SERVER_ACCESS={value})"
+    assert _config.server_access_note().startswith(
+        f"server access is {value} (PLASMASDS_SERVER_ACCESS={value}"
     )
+    if value != "all":
+        assert "unset it, or set it to all" in _config.server_access_note()
 
 
 def test_empty_variable_counts_as_unset(monkeypatch):
@@ -36,7 +38,13 @@ def test_empty_variable_counts_as_unset(monkeypatch):
     assert _config.server_access() == "all"
 
 
-@pytest.mark.parametrize("value", ["none", "Public", "offline"])
+@pytest.mark.parametrize("value", [" Public ", "LOCAL", "All"])
+def test_case_and_spaces_are_ignored(monkeypatch, value):
+    monkeypatch.setenv("PLASMASDS_SERVER_ACCESS", value)
+    assert _config.server_access() == value.strip().lower()
+
+
+@pytest.mark.parametrize("value", ["none", "pub", "offline"])
 def test_other_values_are_refused(monkeypatch, value):
     monkeypatch.setenv("PLASMASDS_SERVER_ACCESS", value)
     with pytest.raises(ConfigError, match="must be one of all, public, local"):

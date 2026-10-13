@@ -129,15 +129,16 @@ SERVER_ACCESS = ("all", "public", "local")
 
 
 def _ci():
-    """Return whether this runs in CI (``CI`` set, as GitHub Actions and most do)."""
+    """Return whether this runs in CI (``CI`` set, as in GitHub Actions, GitLab)."""
     return os.environ.get("CI", "").lower() not in ("", "0", "false")
 
 
 def server_access():
     """Return which servers the utility may contact.
 
-    Read from ``PLASMASDS_SERVER_ACCESS`` on every call; if it is unset or empty,
-    ``"public"`` when the ``CI`` variable is set, else ``"all"``.
+    Read from ``PLASMASDS_SERVER_ACCESS`` on every call, ignoring case and
+    surrounding spaces; if it is unset or empty, ``"public"`` when the ``CI``
+    variable is set (to anything but ``0`` or ``false``), else ``"all"``.
 
     Returns
     -------
@@ -150,13 +151,13 @@ def server_access():
     ConfigError
         If the variable has another value.
     """
-    value = os.environ.get("PLASMASDS_SERVER_ACCESS", "")
+    value = os.environ.get("PLASMASDS_SERVER_ACCESS", "").strip().lower()
     if not value:
         return "public" if _ci() else "all"
     if value not in SERVER_ACCESS:
         raise ConfigError(
             f"PLASMASDS_SERVER_ACCESS must be one of {', '.join(SERVER_ACCESS)}, "
-            f"got {value!r}"
+            f"got {os.environ['PLASMASDS_SERVER_ACCESS']!r}"
         )
     return value
 
@@ -173,8 +174,13 @@ def server_access_note():
         As for :func:`server_access`.
     """
     access = server_access()
-    if os.environ.get("PLASMASDS_SERVER_ACCESS"):
-        return f"server access is {access} (PLASMASDS_SERVER_ACCESS={access})"
+    if os.environ.get("PLASMASDS_SERVER_ACCESS", "").strip():
+        if access == "all":
+            return "server access is all (PLASMASDS_SERVER_ACCESS=all)"
+        return (
+            f"server access is {access} (PLASMASDS_SERVER_ACCESS={access}; unset "
+            "it, or set it to all, to use the servers)"
+        )
     if access == "public":
         return (
             "server access is public, because CI is set (set "
