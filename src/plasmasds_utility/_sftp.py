@@ -56,7 +56,9 @@ _unavailable = {}  # (host, port, user) -> AuthError
 _not_on_server = set()  # ((host, port, user), remote path) known to be missing
 _KEEPALIVE = 60  # seconds between SSH keepalive messages on an idle session
 # Read requests a download keeps in flight (32 kB each). paramiko sends one for every
-# block of a file at once by default: about 43,000 for a 1.4 GB file.
+# block of a file at once by default: about 43,000 for a 1.4 GB file. 64 requests are
+# 2 MB, paramiko's default SSH window, so the bound is never tighter than the flow
+# control already in place and costs no speed.
 _PREFETCH = 64
 
 
