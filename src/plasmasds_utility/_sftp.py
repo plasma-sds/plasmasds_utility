@@ -442,6 +442,52 @@ def listdir(settings, remote_dir, *, timeout=30, attempts=3, backoff=1.0):
     )
 
 
+def exists(settings, remote, *, timeout=30, attempts=3, backoff=1.0):
+    """Return whether a regular file is at remote on the private server.
+
+    A symbolic link counts as its target. Missing, or anything else (a folder),
+    is False; unlike :func:`stat`, a missing file is an answer, not an error, so
+    it is not remembered as missing. The server is always asked.
+
+    Parameters
+    ----------
+    settings, remote, timeout, attempts, backoff
+        As for :func:`download`.
+
+    Returns
+    -------
+    bool
+        Whether a regular file is there.
+
+    Raises
+    ------
+    AuthError, TransferError, ConfigError, ValueError
+        As for :func:`download`; access denied is a TransferError, not False.
+    """
+
+    def ask(sftp):
+        try:
+            mode = sftp.stat(str(remote)).st_mode
+        except FileNotFoundError:
+            return False
+        except OSError as error:
+            if _server_file_error(remote, error) is None:
+                raise
+            raise _server_file_error(remote, error) from error
+        return mode is None or stat_module.S_ISREG(mode)
+
+    return _run(
+        settings,
+        remote,
+        ask,
+        "check",
+        timeout=timeout,
+        attempts=attempts,
+        backoff=backoff,
+        use_cache=False,
+    )
+
+
 def stat(settings, remote, *, use_cache=True, timeout=30, attempts=3, backoff=1.0):
     """Return the size and modification time of a private file on the server.
 

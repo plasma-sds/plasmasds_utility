@@ -187,7 +187,13 @@ data.upload(
 ```
 
 Each client package chooses its own archive layout.
-An upload refused because the key is already there raises `AlreadyOnServer`, so a client uploading many files can skip those already up, and `on_server` asks whether the server has a key, without downloading it:
+Nothing may be at `archive_to` yet; if there is no file to archive, the upload goes ahead with a warning.
+Replacing a file with one of the same size also gives a warning, in case it is the same file: uploading it again only makes every user download it again.
+The content is not compared, as new data often keeps the size of the old (HDF5 files, for example).
+The old file is not copied: it gets a second name on the server (a hard link), so archiving costs no space or time.
+Do not upload the same key from two places at once: the server has no locks, so one of two simultaneous replacements can be lost.
+
+An upload refused because the key is already there raises `AlreadyOnServer`, so a client uploading many files can skip those already up:
 
 ```python
 from plasmasds_utility import AlreadyOnServer
@@ -197,15 +203,15 @@ for key in keys:
         data.upload(key)
     except AlreadyOnServer:
         pass  # already up
-
-data.on_server(key)  # the private server; private=False asks the public one
 ```
 
-Nothing may be at `archive_to` yet; if there is no file to archive, the upload goes ahead with a warning.
-Replacing a file with one of the same size also gives a warning, in case it is the same file: uploading it again only makes every user download it again.
-The content is not compared, as new data often keeps the size of the old (HDF5 files, for example).
-The old file is not copied: it gets a second name on the server (a hard link), so archiving costs no space or time.
-Do not upload the same key from two places at once: the server has no locks, so one of two simultaneous replacements can be lost.
+To ask whether the server has a file without downloading it, use `on_server`; it raises when the server cannot be asked, so "cannot tell" is never `False`:
+
+```python
+key = "aug-axuv/geometry/AXUV_LOS_geom.txt"
+data.on_server(key)  # the private server
+data.on_server(key, private=False)  # the public server, over HTTPS
+```
 
 The file is uploaded to a temporary name next to its target (`.<name>.<random>.part`) and renamed into place only when complete, so people downloading it get either the complete old or the complete new file.
 If a step fails, the message says which one, whether the file on the server is unchanged, and what may be left behind; a source file that changes during the upload is refused.

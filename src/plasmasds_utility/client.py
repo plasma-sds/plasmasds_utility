@@ -805,13 +805,12 @@ class DataClient:
             local copy is missing, cannot be read, or changes during the upload.
         TransferError
             If something is at ``archive_to`` already, a folder is at ``key``, the
-            server refuses
-            a step, or the upload fails after the retries. The message says which
-            step failed, whether the file on the server is unchanged, and what may
-            be left on the server.
+            server refuses a step, or the upload fails after the retries. The
+            message says which step failed, whether the file on the server is
+            unchanged, and what may be left on the server.
         AlreadyOnServer
-            If the file is on the server and ``archive_to`` is not given; the file
-            was not put in place. A :class:`TransferError`, so a client uploading
+            If the file is on the server and ``archive_to`` is not given; nothing
+            was replaced. A :class:`TransferError`, so a client uploading
             many files can catch it to skip those already up.
         AuthError
             If you have no SSH access to the server (see :meth:`get`); uploads of
@@ -867,15 +866,15 @@ class DataClient:
         """Return whether the server has a data file, without downloading it.
 
         Private data is asked over SFTP (a ``stat``, which needs an SSH key),
-        public data over HTTPS (a ``HEAD`` request, as people downloading it see
-        it). The question is about files: a folder at the key answers True over
-        SFTP but usually raises over HTTPS, where the web server refuses it.
+        public data over HTTPS (a ``HEAD`` request): what people downloading it
+        see, which needs no SSH key. The question is about files: on the private
+        server a folder at the key is False; over HTTPS the answer for a folder
+        depends on the web server (it may raise).
 
-        The server is always asked: no earlier answer is reused. A False answer
-        is remembered like any missing file, so a later :meth:`get` of the key in
-        this process does not ask again unless ``update="if_newer"`` is given (an
-        :meth:`upload` of the key clears it). Whether a local copy exists is a
-        different question: ``local_path(key).is_file()``.
+        The server is asked every time, and the answer is not remembered either
+        way. A login failure is, though, as for :meth:`get`: after fixing it,
+        restart Python or call :func:`set_ssh_key`. Whether a local copy exists
+        is a different question: ``local_path(key).is_file()``.
 
         Parameters
         ----------
@@ -887,7 +886,7 @@ class DataClient:
         Returns
         -------
         bool
-            True if something is at ``key`` on that server, False if nothing is.
+            True if the server has a file at ``key``, False if not.
 
         Raises
         ------
@@ -917,15 +916,9 @@ class DataClient:
         _config.start_logging()
         settings = _config.settings()
         if private:
-            try:
-                _sftp.stat(
-                    settings,
-                    _paths.private_remote(settings, self.prefix, key),
-                    use_cache=False,
-                )
-            except _sftp.NotOnServer:
-                return False
-            return True
+            return _sftp.exists(
+                settings, _paths.private_remote(settings, self.prefix, key)
+            )
         try:
             _https.head(_paths.public_url(settings, self.prefix, key))
         except _https.NotOnServer:
