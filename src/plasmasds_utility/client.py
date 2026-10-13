@@ -227,15 +227,59 @@ def _local_files(tree):
 
     Temporary files, anything hidden (including inside hidden directories) and
     names that are not valid keys (with a warning) are left out.
+
+    Symbolic links to files and to folders are followed, as by
+    :meth:`DataClient.get`, but each real folder is walked once: the tree's own
+    folders first, then linked folders, so a file keeps the key of its plain
+    path. A linked folder already walked (a second link to it, or a link back
+    to a parent) is skipped with a line in the log; one that contains the tree
+    (a link to the home folder, say) and broken links are skipped with a
+    warning.
     """
     if not tree.is_dir():
         return []
+    top = os.path.realpath(tree)
+    seen = set()
+    found = []
+    roots = [tree]  # where to walk: the tree, then the linked folders found
+    while roots:
+        root = roots.pop(0)
+        for name, folders, names in os.walk(root):
+            folder = Path(name)
+            real = os.path.realpath(folder)
+            if real in seen:
+                _config.logger.info(
+                    "not checking %s again: it is the same folder as one already "
+                    "checked",
+                    folder,
+                )
+                folders[:] = []
+                continue
+            if folder != tree and _contains(real, top):
+                _config.logger.warning(
+                    "skipping the linked folder %s: it contains the client "
+                    "directory %s",
+                    folder,
+                    tree,
+                )
+                folders[:] = []
+                continue
+            seen.add(real)
+            visible = [n for n in folders if not n.startswith(".")]
+            links = [n for n in visible if os.path.islink(folder / n)]
+            folders[:] = [n for n in visible if n not in links]
+            roots += sorted(folder / n for n in links)
+            for file_name in names:
+                path = folder / file_name
+                if file_name.startswith(".") or file_name.endswith(".part"):
+                    continue
+                if path.is_file():
+                    found.append(path)
+                elif path.is_symlink() and not path.exists():
+                    _config.logger.warning("skipping %s: a broken link", path)
     files = []
-    for path in sorted(p for p in tree.rglob("*") if p.is_file()):
-        parts = path.relative_to(tree).parts
-        if any(part.startswith(".") for part in parts) or path.name.endswith(".part"):
-            continue
-        key = "/".join(parts)
+    for path in sorted(found):
+        key = "/".join(path.relative_to(tree).parts)
         try:
             _paths.check_key(key)
         except PathError as error:
@@ -243,6 +287,14 @@ def _local_files(tree):
             continue
         files.append((path, key))
     return files
+
+
+def _contains(outer, inner):
+    """Return whether the real path outer is inner or one of its parents."""
+    try:
+        return os.path.commonpath([outer, inner]) == outer
+    except ValueError:  # on different drives (Windows)
+        return False
 
 
 class DataClient:
@@ -557,6 +609,13 @@ class DataClient:
         does, downloading it again where the server copy is newer. Temporary and
         hidden files are skipped, including anything inside a hidden directory,
         and so is a file whose name is not a valid key (with a warning).
+        Symbolic links are followed, to files and to folders, for example data
+        kept on another disk, but each real folder is checked once, under its
+        plain path if it has one; a link to a folder that contains the client
+        directory, and a broken link, are skipped with a warning. A file in a
+        linked folder is downloaded again into that folder (which must be
+        writable), while a linked file is replaced by a regular file, and the
+        file it pointed to is left as it was.
 
         Private files are checked with one SFTP listing per directory; public
         files with one HTTPS ``HEAD`` request each, so a public tree of many
