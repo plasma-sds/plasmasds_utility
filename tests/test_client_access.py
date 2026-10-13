@@ -5,7 +5,7 @@ from conftest import write_config
 
 import plasmasds_utility
 import plasmasds_utility.client as client_module
-from plasmasds_utility import AuthError, DataClient, TransferError, _config
+from plasmasds_utility import AuthError, DataClient, TransferError, _config, _https
 
 
 @pytest.fixture
@@ -51,12 +51,24 @@ def local(monkeypatch):
 # public
 
 
-def test_public_get_takes_public_data_without_sftp(servers, public):
+def test_public_get_takes_public_data_without_sftp_and_says_so(servers, public):
     sftp, http = servers
     path = DataClient("renate-od").get("a.h5")
     assert path.read_bytes() == b"dummy"
     assert sftp.connections == 0
-    assert client_module._fallbacks == {}  # not a fallback: public was asked for
+    # Public data instead of private data: announced, as any fallback is.
+    assert client_module._fallbacks == {
+        ("renate-od", "a.h5"): _config.server_access_note()
+    }
+
+
+def test_public_uses_a_local_private_copy_first(servers, public):
+    sftp, http = servers
+    client = DataClient("renate-od")
+    place(client.local_path("a.h5"), b"mine")
+    assert client.get("a.h5").read_bytes() == b"mine"
+    assert sftp.connections == 0
+    assert requests(http) == 0
 
 
 def test_ci_makes_get_public(servers, monkeypatch):
@@ -98,14 +110,17 @@ def test_public_refuses_uploads(servers, public):
     assert sftp.connections == 0
 
 
-def test_public_check_updates_reports_private_data_not_checked(servers, public):
+def test_public_check_updates_reports_private_data_without_failing(
+    servers, public, capsys
+):
     sftp, http = servers
     client = DataClient("renate-od")
     place(client.local_path("a.h5"), b"mine")
     place(client.local_path("a.h5", private=False), b"dummy")
-    with pytest.raises(TransferError, match="private data \\(not checked\\)") as e:
-        client.check_updates()
-    assert e.value.updated == []
+    assert client.check_updates() == []
+    assert "1 private file(s) not checked (server access is public" in (
+        capsys.readouterr().err
+    )
     assert sftp.connections == 0
     assert http.requests["HEAD /~data/renate-od/a.h5"] == 1
 
@@ -121,12 +136,12 @@ def test_public_check_updates_of_public_data_only(servers, public):
 def test_public_notice_and_connection_check(servers, public, capsys):
     sftp, http = servers
     DataClient("renate-od").get("a.h5")
-    assert "Only public data is used: server access is public" in (
+    assert "Here, though, the private server is not contacted" in (
         capsys.readouterr().err
     )
     plasmasds_utility.check_connection()
     out = capsys.readouterr().out
-    assert "  server access is public (PLASMASDS_SERVER_ACCESS=public)" in out
+    assert "  server access: public (PLASMASDS_SERVER_ACCESS=public; unset it" in out
     assert "private data (SFTP): not tried (server access is public)" in out
     assert sftp.connections == 0
 
@@ -197,4 +212,45 @@ def test_local_notice_says_nothing_is_downloaded(servers, local, capsys):
     client = DataClient("renate-od")
     place(client.local_path("a.h5"), b"mine")
     client.get("a.h5")
-    assert "a file not on disk is not downloaded" in capsys.readouterr().err
+    assert "no server is contacted, so a file not on disk raises" in (
+        capsys.readouterr().err
+    )
+
+
+def test_public_missing_file_says_why_private_was_skipped(servers, public):
+    sftp, http = servers
+    with pytest.raises(TransferError) as error:
+        DataClient("renate-od").get("b.h5")
+    message = str(error.value)
+    assert "not from the private server (server access is public" in message
+    assert "not from the public server" in message
+    assert client_module._fallbacks == {}
+    assert sftp.connections == 0
+
+
+def test_public_refusal_makes_no_folder(servers, public):
+    client = DataClient("renate-od")
+    with pytest.raises(AuthError):
+        client.get("deep/inside/a.h5", private=True)
+    assert not (client.client_dir() / "private").exists()
+
+
+def test_local_transports_refuse_on_their_own(servers, local):
+    # get() and the others decide first; the transports refuse anyway.
+    sftp, http = servers
+    url = http.url("/~data/renate-od/a.h5")
+    with pytest.raises(TransferError, match="not contacting the public server"):
+        _https.download(url, DataClient("renate-od").client_dir() / "x.h5")
+    with pytest.raises(TransferError, match="not contacting the public server"):
+        _https.head(url)
+    assert requests(http) == 0
+
+
+def test_public_update_of_a_private_copy_keeps_it_and_says_why(servers, public):
+    sftp, http = servers
+    client = DataClient("renate-od")
+    place(client.local_path("a.h5"), b"mine")
+    with pytest.raises(AuthError, match="kept the local copy .* server access is"):
+        client.get("a.h5", private=True, update="if_newer")
+    assert client.local_path("a.h5").read_bytes() == b"mine"
+    assert sftp.connections == 0
