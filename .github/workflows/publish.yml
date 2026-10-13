@@ -30,7 +30,7 @@ jobs:
             echo "the tag ${GITHUB_REF_NAME} does not match the package version ${version}"
             exit 1
           fi
-          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/master; then
+          if ! git merge-base --is-ancestor HEAD origin/master; then
             echo "the tag ${GITHUB_REF_NAME} is not on master"
             exit 1
           fi
