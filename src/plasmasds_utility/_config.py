@@ -125,6 +125,64 @@ def env_data_dir():
     return path
 
 
+SERVER_ACCESS = ("all", "public", "local")
+
+
+def _ci():
+    """Return whether this runs in CI (``CI`` set, as GitHub Actions and most do)."""
+    return os.environ.get("CI", "").lower() not in ("", "0", "false")
+
+
+def server_access():
+    """Return which servers the utility may contact.
+
+    Read from ``PLASMASDS_SERVER_ACCESS`` on every call; if it is unset or empty,
+    ``"public"`` when the ``CI`` variable is set, else ``"all"``.
+
+    Returns
+    -------
+    str
+        ``"all"`` (both servers), ``"public"`` (only the public server, over
+        HTTPS) or ``"local"`` (no server: local copies only).
+
+    Raises
+    ------
+    ConfigError
+        If the variable has another value.
+    """
+    value = os.environ.get("PLASMASDS_SERVER_ACCESS", "")
+    if not value:
+        return "public" if _ci() else "all"
+    if value not in SERVER_ACCESS:
+        raise ConfigError(
+            f"PLASMASDS_SERVER_ACCESS must be one of {', '.join(SERVER_ACCESS)}, "
+            f"got {value!r}"
+        )
+    return value
+
+
+def server_access_note():
+    """Return a phrase saying the server access mode and where it comes from.
+
+    For messages, for example ``"server access is public, because CI is set
+    (set PLASMASDS_SERVER_ACCESS to change it)"``.
+
+    Raises
+    ------
+    ConfigError
+        As for :func:`server_access`.
+    """
+    access = server_access()
+    if os.environ.get("PLASMASDS_SERVER_ACCESS"):
+        return f"server access is {access} (PLASMASDS_SERVER_ACCESS={access})"
+    if access == "public":
+        return (
+            "server access is public, because CI is set (set "
+            "PLASMASDS_SERVER_ACCESS to change it)"
+        )
+    return "server access is all"
+
+
 def _defaults():
     """Return the packaged defaults as a dict."""
     text = resources.files("plasmasds_utility").joinpath("data", "defaults.toml")
