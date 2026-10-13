@@ -35,6 +35,7 @@ import tomllib
 from importlib import resources
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from plasmasds_utility import _files
 from plasmasds_utility.exceptions import ConfigError, PathError
@@ -169,7 +170,8 @@ def _merge(defaults, user, path):
     Raises
     ------
     ConfigError
-        If a value has the wrong type, or a working directory is not an absolute path.
+        If a value has the wrong type, a working directory or the SSH key is not an
+        absolute path, or public_url is not an http(s) address.
     """
     merged = dict(defaults)
     for key, value in user.items():
@@ -196,6 +198,12 @@ def _merge(defaults, user, path):
     if merged["ssh_key"] and not Path(merged["ssh_key"]).is_absolute():
         raise ConfigError(
             f"{path}: ssh_key must be an absolute path, got {merged['ssh_key']!r}"
+        )
+    url = urlsplit(merged["public_url"])
+    if url.scheme not in ("https", "http") or not url.netloc:
+        raise ConfigError(
+            f"{path}: public_url must be a web address starting with https://, "
+            f"got {merged['public_url']!r}"
         )
     return merged
 

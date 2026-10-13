@@ -26,7 +26,7 @@ Issues = "https://github.com/plasma-sds/plasmasds_utility/issues"
 path = "src/plasmasds_utility/__init__.py"
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "tests", "README.md", "LICENSE"]
+include = ["src", "tests", "examples", "README.md", "LICENSE"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -57,6 +57,9 @@ plasmasds_utility = { path = ".", editable = true }
 
 [tool.pixi.feature.test.dependencies]
 pytest = ">=8"
+# To run the example notebook in the tests; not dependencies of the package.
+nbclient = ">=0.10"
+ipykernel = ">=6"
 
 [tool.pixi.feature.test.tasks]
 test = "pytest"

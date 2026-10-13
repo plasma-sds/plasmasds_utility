@@ -4,6 +4,7 @@ import atexit
 import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 from plasmasds_utility import _config, _https, _paths, _sftp
@@ -11,6 +12,7 @@ from plasmasds_utility.exceptions import (
     AuthError,
     ConfigError,
     PathError,
+    PlasmasdsUtilityError,
     TransferError,
 )
 
@@ -843,3 +845,104 @@ def set_ssh_key(path):
     _sftp.close_all()  # use the new key at once, not a remembered failure
     _config.logger.info("SSH key set to %s", key)
     return key
+
+
+# A small file kept on the server in both trees for check_connection(); its
+# content never changes.
+_CONNECTION_TEST = ("plasmasds_utility", "test/connection_test.txt")
+_CONNECTION_TEXT = b"plasmasds_utility connection test\n"
+
+
+def check_connection():
+    """Check that the data server can be reached, over HTTPS and over SFTP.
+
+    Downloads a small test file that is kept on the server for this, once from
+    the public data over HTTPS and once from the private data over SFTP, into a
+    temporary folder that is removed afterwards; nothing is written to the data
+    folders. Each way is tried once, so a blocked port shows after about 30
+    seconds instead of after retries. The SFTP check always connects afresh: it
+    forgets an open session and a remembered login failure, so it also shows
+    whether a fix (for example ``ssh-add``) worked, without restarting Python.
+
+    A report is printed to standard output and logged: the version, the settings
+    in use (server, SSH key, data folder, log file) and, for each way of access,
+    "ok" or why it failed.
+
+    Returns
+    -------
+    None
+        The report is printed, not returned.
+
+    Raises
+    ------
+    ConfigError
+        If the user configuration file is invalid, ``PLASMASDS_DATA_DIR`` is a
+        relative path, or the log directory cannot be created. Failures of the
+        connections themselves, including a missing SSH key, are reported, not
+        raised.
+
+    Examples
+    --------
+    >>> import plasmasds_utility
+    >>> plasmasds_utility.check_connection()  # doctest: +SKIP
+    plasmasds_utility 0.1.0 connection check
+      server: data@deep.reak.bme.hu, port 72; public data: https://deep.reak.bme.hu/~data
+      SSH key: /home/me/.ssh/plasmasds_deep
+      data folder: /home/me/.local/share/plasmasds
+      log file: /home/me/.local/state/plasmasds/plasmasds.log
+      public data (HTTPS): ok
+      private data (SFTP): ok
+    """
+    from plasmasds_utility import __version__
+
+    _config.start_logging()
+    settings = _config.settings()
+    env_dir = _config.env_data_dir()
+    lines = [
+        f"plasmasds_utility {__version__} connection check",
+        f"  server: {settings['user']}@{settings['host']}, port {settings['port']}; "
+        f"public data: {settings['public_url']}",
+        "  SSH key: "
+        + (settings["ssh_key"] or "none saved (the SSH agent and ~/.ssh/id_* keys)"),
+        f"  data folder: {env_dir or _config.default_data_dir()}"
+        + (" (from PLASMASDS_DATA_DIR)" if env_dir else ""),
+    ]
+    lines += [
+        f"  working folder of {prefix}: {path}"
+        + (" (not used: PLASMASDS_DATA_DIR is set)" if env_dir else "")
+        for prefix, path in settings["working_dirs"].items()
+    ]
+    lines.append(f"  log file: {_config.log_dir() / _config.LOG_FILE}")
+    prefix, key = _CONNECTION_TEST
+    checks = {
+        "public": lambda target: _https.download(
+            _paths.public_url(settings, prefix, key), target, attempts=1
+        ),
+        "private": lambda target: _sftp.download(
+            settings,
+            _paths.private_remote(settings, prefix, key),
+            target,
+            use_cache=False,
+            attempts=1,
+        ),
+    }
+    _sftp.forget(settings)  # test the connection as it is now
+    with tempfile.TemporaryDirectory() as folder:
+        for name, fetch in checks.items():
+            way = "HTTPS" if name == "public" else "SFTP"
+            target = Path(folder) / name
+            try:
+                fetch(target)
+                if target.read_bytes() != _CONNECTION_TEXT:
+                    raise TransferError(f"the test file {key!r} has unexpected content")
+                outcome = "ok"
+            except (_https.NotOnServer, _sftp.NotOnServer):
+                outcome = (
+                    f"the server was reached, but the test file {prefix}/{key} is "
+                    "missing on it; tell the server's admins"
+                )
+            except PlasmasdsUtilityError as error:
+                outcome = f"failed: {error}"
+            lines.append(f"  {name} data ({way}): {outcome}")
+    _config.logger.info("\n".join(lines))
+    print("\n".join(lines))

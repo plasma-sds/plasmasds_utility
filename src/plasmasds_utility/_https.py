@@ -157,7 +157,8 @@ def _run(url, action, verb, attempts, backoff):
         if attempt < attempts:
             time.sleep(backoff * 2 ** (attempt - 1))
     raise TransferError(
-        f"cannot {verb} {url} after {attempts} attempts: {last_error}"
+        f"cannot {verb} {url} after {attempts} attempt{'s' if attempts > 1 else ''}: "
+        f"{last_error}"
     ) from last_error
 
 

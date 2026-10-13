@@ -18,7 +18,15 @@ import paramiko
 import pytest
 
 import plasmasds_utility
-from plasmasds_utility import DataClient, TransferError, _config, _https, _paths, _sftp
+from plasmasds_utility import (
+    DataClient,
+    TransferError,
+    _config,
+    _https,
+    _paths,
+    _sftp,
+    client,
+)
 
 # renate's own access-test files, unchanged since 2018.
 PUBLIC_KEY = "test_dataset/access_tests/public_test.txt"
@@ -132,3 +140,22 @@ def test_upload_to_the_data_server(home, server_files):
     client.upload(key, private=False)
     size, _ = _https.head(_paths.public_url(settings, client.prefix, key))
     assert size == 6
+
+
+@pytest.mark.network
+def test_public_connection_test_file(home):
+    # Over HTTPS only: CI never contacts the SFTP server (decided on #17).
+    url = _paths.public_url(_config.settings(), *client._CONNECTION_TEST)
+    target = _https.download(url, home / "connection_test.txt")
+    assert target.read_bytes() == client._CONNECTION_TEXT
+
+
+@pytest.mark.private
+def test_check_connection_against_the_data_server(home, capsys):
+    if not SSH_KEY:
+        pytest.skip("set PLASMASDS_TEST_SSH_KEY to a key for the private data server")
+    plasmasds_utility.set_ssh_key(SSH_KEY)
+    plasmasds_utility.check_connection()
+    out = capsys.readouterr().out
+    assert "public data (HTTPS): ok" in out
+    assert "private data (SFTP): ok" in out
