@@ -38,6 +38,7 @@ from paramiko.sftp import CMD_EXTENDED
 
 from plasmasds_utility import _config, _files
 from plasmasds_utility.exceptions import (
+    AlreadyOnServerError,
     AuthError,
     ConfigError,
     PathError,
@@ -46,7 +47,7 @@ from plasmasds_utility.exceptions import (
 )
 
 
-class NotOnServer(TransferError):
+class NotOnServerError(TransferError):
     """The file is not on the private server (a TransferError that is not retried)."""
 
 
@@ -281,7 +282,7 @@ def download(
         no key is found. Remembered until Python restarts: later calls for the
         same server raise it again without connecting.
     TransferError
-        If the file is not on the server (``NotOnServer``; remembered until Python
+        If the file is not on the server (``NotOnServerError``; remembered until Python
         restarts), access to it is denied, or the download still fails after the
         last attempt.
     ConfigError
@@ -309,7 +310,7 @@ def _run(settings, remote, action, verb, *, timeout, attempts, backoff, use_cach
     """Call action(sftp) on a session for settings, with bounded retries.
 
     Opens or reuses the session, raises remembered failures at once, remembers
-    new AuthErrors and NotOnServer, and retries other connection failures with a
+    new AuthErrors and NotOnServerError, and retries other connection failures with a
     new session. With ``use_cache`` false, a file remembered as missing is asked
     for again. ``verb`` names the operation in messages. Returns the result of
     action.
@@ -329,7 +330,7 @@ def _run(settings, remote, action, verb, *, timeout, attempts, backoff, use_cach
                 # A fresh traceback each time, or the cached one grows per call.
                 raise _unavailable[server].with_traceback(None)
             if use_cache and (server, str(remote)) in _not_on_server:
-                raise NotOnServer(f"{remote} is not on the private server")
+                raise NotOnServerError(f"{remote} is not on the private server")
             locked_key = None
             if server in _sessions and not _alive(_sessions[server][0]):
                 _close(server)  # closed by the server: reconnect without a warning
@@ -342,7 +343,7 @@ def _run(settings, remote, action, verb, *, timeout, attempts, backoff, use_cach
                 result = action(_sessions[server][1])
                 _not_on_server.discard((server, str(remote)))
                 return result
-            except NotOnServer:
+            except NotOnServerError:
                 _not_on_server.add((server, str(remote)))
                 raise
             except (paramiko.SSHException, OSError, EOFError) as error:
@@ -402,7 +403,7 @@ def listdir(settings, remote_dir, *, timeout=30, attempts=3, backoff=1.0):
     Raises
     ------
     AuthError, TransferError, ConfigError, ValueError
-        As for :func:`download`; a missing directory raises ``NotOnServer``.
+        As for :func:`download`; a missing directory raises ``NotOnServerError``.
     """
 
     def ask(sftp):
@@ -434,6 +435,52 @@ def listdir(settings, remote_dir, *, timeout=30, attempts=3, backoff=1.0):
         remote_dir,
         ask,
         "list",
+        timeout=timeout,
+        attempts=attempts,
+        backoff=backoff,
+        use_cache=False,
+    )
+
+
+def exists(settings, remote, *, timeout=30, attempts=3, backoff=1.0):
+    """Return whether a regular file is at remote on the private server.
+
+    A symbolic link counts as its target. Missing, or anything else (a folder),
+    is False; unlike :func:`stat`, a missing file is an answer, not an error, so
+    it is not remembered as missing. The server is always asked.
+
+    Parameters
+    ----------
+    settings, remote, timeout, attempts, backoff
+        As for :func:`download`.
+
+    Returns
+    -------
+    bool
+        Whether a regular file is there.
+
+    Raises
+    ------
+    AuthError, TransferError, ConfigError, ValueError
+        As for :func:`download`; access denied is a TransferError, not False.
+    """
+
+    def ask(sftp):
+        try:
+            mode = sftp.stat(str(remote)).st_mode
+        except FileNotFoundError:
+            return False
+        except OSError as error:
+            if _server_file_error(remote, error) is None:
+                raise
+            raise _server_file_error(remote, error) from error
+        return mode is None or stat_module.S_ISREG(mode)
+
+    return _run(
+        settings,
+        remote,
+        ask,
+        "check",
         timeout=timeout,
         attempts=attempts,
         backoff=backoff,
@@ -563,7 +610,7 @@ def upload(
                 "the server"
             )
         if existed and archive_to is None:
-            raise TransferError(
+            raise AlreadyOnServerError(
                 f"{remote} is already on the server; an upload replaces a file only "
                 "when the old one is archived (archive_to)"
             )
@@ -667,7 +714,7 @@ def upload(
                     if (
                         existed
                         and not archived
-                        and not isinstance(error, _NoHardLinks)
+                        and not isinstance(error, _NoHardLinksError)
                         and _exists_or_unknown(sftp, archive_to) is not False
                     ):
                         # The link may have been made with its answer lost, or
@@ -824,7 +871,7 @@ class _Source:
             raise PathError(f"cannot read {self._path}: {error}") from error
 
 
-class _NoHardLinks(OSError):
+class _NoHardLinksError(OSError):
     """The server does not support OpenSSH's hard-link extension."""
 
 
@@ -839,7 +886,7 @@ def _hardlink(sftp, old, new):
     except OSError as error:
         if "unsupported" not in str(error).lower():
             raise
-        raise _NoHardLinks(
+        raise _NoHardLinksError(
             "the server does not support hard links (hardlink@openssh.com), which "
             "archiving needs"
         ) from error
@@ -859,7 +906,7 @@ def _remove(sftp, path):
 def _server_file_error(remote, error):
     """Return the error for a missing or forbidden server file, else None."""
     if isinstance(error, FileNotFoundError):
-        return NotOnServer(f"{remote} is not on the private server")
+        return NotOnServerError(f"{remote} is not on the private server")
     if isinstance(error, PermissionError):
         return TransferError(f"access to {remote} is denied on the private server")
     return None

@@ -17,7 +17,7 @@ from plasmasds_utility.exceptions import TransferError
 _CHUNK = 1024 * 1024
 
 
-class NotOnServer(TransferError):
+class NotOnServerError(TransferError):
     """The file is not on the public server (HTTP 404; not retried)."""
 
 
@@ -145,7 +145,7 @@ def _run(url, action, verb, attempts, backoff):
             return action()
         except urllib.error.HTTPError as error:
             if error.code == 404:
-                raise NotOnServer(
+                raise NotOnServerError(
                     f"{url} is not on the public server (HTTP 404)"
                 ) from error
             if error.code < 500:

@@ -193,6 +193,26 @@ The content is not compared, as new data often keeps the size of the old (HDF5 f
 The old file is not copied: it gets a second name on the server (a hard link), so archiving costs no space or time.
 Do not upload the same key from two places at once: the server has no locks, so one of two simultaneous replacements can be lost.
 
+An upload refused because the key is already there raises `AlreadyOnServerError`, so a client uploading many files can skip those already up:
+
+```python
+from plasmasds_utility import AlreadyOnServerError
+
+for key in keys:
+    try:
+        data.upload(key)
+    except AlreadyOnServerError:
+        pass  # already up
+```
+
+To ask whether the server has a file without downloading it, use `on_server`; it raises when the server cannot be asked, so "cannot tell" is never `False`:
+
+```python
+key = "aug-axuv/geometry/AXUV_LOS_geom.txt"
+data.on_server(key)  # the private server
+data.on_server(key, private=False)  # the public server, over HTTPS
+```
+
 The file is uploaded to a temporary name next to its target (`.<name>.<random>.part`) and renamed into place only when complete, so people downloading it get either the complete old or the complete new file.
 If a step fails, the message says which one, whether the file on the server is unchanged, and what may be left behind; a source file that changes during the upload is refused.
 Uploaded files are readable by everyone on the server (mode 0644, directories 0755), which public data needs to be served over HTTPS.

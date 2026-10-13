@@ -19,8 +19,8 @@ import pytest
 
 import plasmasds_utility
 from plasmasds_utility import (
+    AlreadyOnServerError,
     DataClient,
-    TransferError,
     _config,
     _https,
     _paths,
@@ -127,7 +127,7 @@ def test_upload_to_the_data_server(home, server_files):
     size, mtime = _sftp.stat(settings, remote)
     assert size == 5
     assert local.stat().st_mtime == mtime
-    with pytest.raises(TransferError, match="already on the server"):
+    with pytest.raises(AlreadyOnServerError, match="already on the server"):
         client.upload(key)
     local.write_bytes(b"second")
     client.upload(key, archive_to=old)
@@ -140,6 +140,10 @@ def test_upload_to_the_data_server(home, server_files):
     client.upload(key, private=False)
     size, _ = _https.head(_paths.public_url(settings, client.prefix, key))
     assert size == 6
+    # on_server asks both servers (#44).
+    assert client.on_server(key) is True
+    assert client.on_server(key, private=False) is True
+    assert client.on_server(old + ".missing") is False
 
 
 @pytest.mark.network

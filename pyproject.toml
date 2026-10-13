@@ -37,7 +37,7 @@ markers = [
 ]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "B", "UP", "D"]
+select = ["E", "F", "W", "I", "B", "UP", "D", "N818"]  # N818: exceptions end in Error
 
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"

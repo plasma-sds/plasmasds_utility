@@ -207,7 +207,7 @@ def _kept(path, error, force):
     An AuthError stays an AuthError, so callers catching it still do.
     """
     cls = AuthError if isinstance(error, AuthError) else TransferError
-    if isinstance(error, (_sftp.NotOnServer, _https.NotOnServer)):
+    if isinstance(error, (_sftp.NotOnServerError, _https.NotOnServerError)):
         return cls(f"kept the local copy {path}: {error}")
     failed = "could not be downloaded again" if force else "could not be checked"
     return cls(f"kept the local copy {path}, but the server copy {failed}: {error}")
@@ -549,7 +549,7 @@ class DataClient:
                     return _sftp.download(
                         settings, remote, private_path, use_cache=not refresh
                     )
-                except (AuthError, _sftp.NotOnServer) as error:
+                except (AuthError, _sftp.NotOnServerError) as error:
                     if private:
                         raise
                     reason = error
@@ -665,7 +665,7 @@ class DataClient:
                 if _refresh_public(url, path, False):
                     updated.append(path)
                     _config.logger.info("updated %s", path)
-            except _https.NotOnServer as error:
+            except _https.NotOnServerError as error:
                 missing.append(path)
                 _config.logger.warning("kept %s: %s", path, error)
             except (TransferError, PathError) as error:
@@ -730,7 +730,7 @@ class DataClient:
         for remote_dir, entries in by_dir.items():
             try:
                 listing = _sftp.listdir(settings, remote_dir)
-            except _sftp.NotOnServer:
+            except _sftp.NotOnServerError:
                 listing = {}
             except AuthError:
                 raise
@@ -804,11 +804,14 @@ class DataClient:
             If ``key`` or ``archive_to`` is invalid, they are the same key, or the
             local copy is missing, cannot be read, or changes during the upload.
         TransferError
-            If the file is on the server and ``archive_to`` is not given, something
-            is at ``archive_to`` already, a folder is at ``key``, the server refuses
-            a step, or the upload fails after the retries. The message says which
-            step failed, whether the file on the server is unchanged, and what may
-            be left on the server.
+            If something is at ``archive_to`` already, a folder is at ``key``, the
+            server refuses a step, or the upload fails after the retries. The
+            message says which step failed, whether the file on the server is
+            unchanged, and what may be left on the server.
+        AlreadyOnServerError
+            If the file is on the server and ``archive_to`` is not given; nothing
+            was replaced. A :class:`TransferError`, so a client uploading
+            many files can catch it to skip those already up.
         AuthError
             If you have no SSH access to the server (see :meth:`get`); uploads of
             public data need it too. Also at once, without connecting, if
@@ -858,6 +861,69 @@ class DataClient:
                     path,
                     error,
                 )
+
+    def on_server(self, key, *, private=True):
+        """Return whether the server has a data file, without downloading it.
+
+        Private data is asked over SFTP (a ``stat``, which needs an SSH key),
+        public data over HTTPS (a ``HEAD`` request): what people downloading it
+        see, which needs no SSH key. The question is about files: on the private
+        server a folder at the key is False; over HTTPS the answer for a folder
+        depends on the web server (it may raise).
+
+        The server is asked every time, and the answer is not remembered either
+        way. A login failure is, though, as for :meth:`get`: after fixing it,
+        restart Python or call :func:`set_ssh_key`. Whether a local copy exists
+        is a different question: ``local_path(key).is_file()``.
+
+        Parameters
+        ----------
+        key : str
+            The data key (see :meth:`local_path`).
+        private : bool, default True
+            True to ask the private server, False the public one.
+
+        Returns
+        -------
+        bool
+            True if the server has a file at ``key``, False if not.
+
+        Raises
+        ------
+        ValueError
+            If ``private`` is not True or False.
+        PathError
+            If the key is invalid.
+        AuthError
+            With ``private=True``, if private data is not available to you, or
+            the private server may not be contacted (``PLASMASDS_SERVER_ACCESS``).
+        TransferError
+            If the server cannot be asked (a timeout, say, or
+            ``PLASMASDS_SERVER_ACCESS`` is ``"local"``): "cannot tell" is never
+            answered as False.
+        ConfigError
+            As for :meth:`get`.
+
+        Examples
+        --------
+        >>> data = DataClient("bolometer")
+        >>> data.on_server("aug-axuv/geometry/AXUV_LOS_geom.txt")  # doctest: +SKIP
+        True
+        """
+        if not isinstance(private, bool):
+            raise ValueError(f"private must be True or False, got {private!r}")
+        _paths.check_key(key)
+        _config.start_logging()
+        settings = _config.settings()
+        if private:
+            return _sftp.exists(
+                settings, _paths.private_remote(settings, self.prefix, key)
+            )
+        try:
+            _https.head(_paths.public_url(settings, self.prefix, key))
+        except _https.NotOnServerError:
+            return False
+        return True
 
     def set_working_dir(self, path):
         """Save the working directory for this client in the user configuration.
@@ -1097,7 +1163,7 @@ def check_connection():
                 if target.read_bytes() != _CONNECTION_TEXT:
                     raise TransferError(f"the test file {key!r} has unexpected content")
                 outcome = "ok"
-            except (_https.NotOnServer, _sftp.NotOnServer):
+            except (_https.NotOnServerError, _sftp.NotOnServerError):
                 outcome = (
                     f"the server was reached, but the test file {prefix}/{key} is "
                     "missing on it; tell the server's admins"
