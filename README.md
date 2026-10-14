@@ -7,20 +7,16 @@ A shared utility for the plasma-sds synthetic diagnostics (renate, neuro_bes, sy
 - It serves several client packages, each with its own folder on the server and locally; the local tree mirrors the server.
 - It runs on Linux and Windows with Python 3.11 or newer; its only dependency is paramiko.
 
-> **Status:** not released yet; the first release is tracked in [#30](https://github.com/plasma-sds/plasmasds_utility/issues/30).
-> Until then, install it from GitHub (below).
-
 The design and the decisions that amend it are in [issue #6](https://github.com/plasma-sds/plasmasds_utility/issues/6); progress is tracked on the [project board](https://github.com/orgs/plasma-sds/projects/10).
 
 ## Installing
 
 ```bash
-pip install "plasmasds_utility @ git+https://github.com/plasma-sds/plasmasds_utility@development"
+pip install plasmasds_utility
 ```
 
-This needs `git` on the computer.
-Once it is released, this becomes `pip install plasmasds_utility`.
-To check that it can reach the data server, run `python -c "import plasmasds_utility; plasmasds_utility.check_connection()"` (see [Troubleshooting](#troubleshooting)).
+The development version, from GitHub (this needs `git`): `pip install "plasmasds_utility @ git+https://github.com/plasma-sds/plasmasds_utility@development"`.
+To check that it can reach the data server, run `python -c "import plasmasds_utility; plasmasds_utility.check_connection()"` (see [Troubleshooting](https://github.com/plasma-sds/plasmasds_utility#troubleshooting)).
 
 ## Using it in a client package
 
@@ -29,20 +25,13 @@ A client package declares the dependency in its `pyproject.toml`:
 ```toml
 [project]
 dependencies = [
-    # until the first release:
-    "plasmasds_utility @ git+https://github.com/plasma-sds/plasmasds_utility@development",
-    # afterwards, up to the next release that may change the interface:
-    # "plasmasds_utility>=0.1,<0.2",
+    # up to the next release that may change the interface
+    "plasmasds_utility>=0.1,<0.2",
 ]
-
-# Only for the GitHub form, if the client builds with hatchling:
-[tool.hatch.metadata]
-allow-direct-references = true
 ```
 
-A client managed with pixi can list it under `[tool.pixi.pypi-dependencies]` instead, as `plasmasds_utility = { git = "https://github.com/plasma-sds/plasmasds_utility", branch = "development" }`.
-`development` moves; to keep a client's results reproducible, pin a tag instead, for example `step/6-8` (`tag = "step/6-8"` for pixi, `@step/6-8` in the GitHub form).
-A package published on PyPI cannot depend on a GitHub address, so a client is published only after the first release of this utility.
+A client managed with pixi can list it under `[tool.pixi.pypi-dependencies]` instead, as `plasmasds_utility = ">=0.1,<0.2"`.
+Until 1.0, a release that raises the second number (0.1 to 0.2) may change the interface, so the upper bound keeps a client working until it is updated.
 
 The client creates one `DataClient` for its own folder on the server, its *prefix*, usually its package name, and asks it for files wherever it needs them:
 
@@ -92,7 +81,7 @@ It returns the first of these it finds:
 4. the file on the public server, downloaded over HTTPS.
 
 A local private copy is returned straight away, without contacting a server.
-A local public copy is returned once the private server has been asked for the file, at most once per file and session, because private data comes first; `private=False` skips that; on a machine without network, set `PLASMASDS_SERVER_ACCESS=local` (see [Using it in a client package](#using-it-in-a-client-package)).
+A local public copy is returned once the private server has been asked for the file, at most once per file and session, because private data comes first; `private=False` skips that; on a machine without network, set `PLASMASDS_SERVER_ACCESS=local` (see [Using it in a client package](https://github.com/plasma-sds/plasmasds_utility#using-it-in-a-client-package)).
 Downloads are written to a temporary file and moved into place only when complete, and the local file keeps the server's modification time.
 
 To choose the source, pass `private`:
@@ -136,7 +125,7 @@ Otherwise users' checks see their copy as newer and keep it.
 ### Large files
 
 Transfers stream to and from disk: downloading a 1.1 GB file over SFTP took under 70 MB of memory in a test.
-A transfer of 50 MB or more prints when it starts, with its size (and, the first time, the command that follows the [log](#the-log)), and then, while data arrives, a line at least a minute apart with how much is done, the average speed and the time left:
+A transfer of 50 MB or more prints when it starts, with its size (and, the first time, the command that follows the [log](https://github.com/plasma-sds/plasmasds_utility#the-log)), and then, while data arrives, a line at least a minute apart with how much is done, the average speed and the time left:
 
 ```text
 plasmasds_utility: downloading private_html/bolometer/aug-axuv/raytransfer/raytransfer_S16_refl.h5 (1400 MB); to follow the progress in the log: tail -F /home/me/.local/state/plasmasds/plasmasds.log
@@ -173,8 +162,8 @@ data.upload(key)  # the local private copy, to the private server
 data.upload(key, private=False)  # the local public copy, to the public server
 ```
 
-`upload` sends the local copy of a key (see [Where files go](#where-files-go)) to the same key on the server.
-It uses SFTP for both trees, so it needs an SSH key (see [Private data](#private-data)) even for public data.
+`upload` sends the local copy of a key (see [Where files go](https://github.com/plasma-sds/plasmasds_utility#where-files-go)) to the same key on the server.
+It uses SFTP for both trees, so it needs an SSH key (see [Private data](https://github.com/plasma-sds/plasmasds_utility#private-data)) even for public data.
 
 An upload never loses data on the server: a file that is already there is replaced only when you name another key, in the same tree, to keep the old one under.
 For example, a release of renate keeps the previous reference results with the version that made them:
@@ -314,7 +303,7 @@ plasmasds_utility.check_connection()
 It downloads a small test file kept on the server, over HTTPS and over SFTP, into a temporary folder, and prints the settings in use and what failed:
 
 ```text
-plasmasds_utility 0.1.0 connection check
+plasmasds_utility <version> connection check
   server: data@deep.reak.bme.hu, port 72; public data: https://deep.reak.bme.hu/~data
   SSH key: none saved (the SSH agent and ~/.ssh/id_* keys)
   data folder: /home/me/.local/share/plasmasds
@@ -342,7 +331,7 @@ The usual failures:
 - **"the test file … is missing":** the server was reached; tell the server's admins.
   (For them: the check needs `plasmasds_utility/test/connection_test.txt` in both trees, with the content `plasmasds_utility connection test`; the tests use the same folder for files of their own, which they remove themselves.)
 
-The [log](#the-log) has the details of every failure.
+The [log](https://github.com/plasma-sds/plasmasds_utility#the-log) has the details of every failure.
 
 ## Development
 

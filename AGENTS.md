@@ -95,7 +95,8 @@ The environment is managed with [pixi](https://pixi.sh); its configuration lives
 - Never work on `master`.
   `development` reaches `master` only through an owner.
 - Never commit on `development` directly, and never push it.
-- The only things an agent pushes are the branch of its open pull request and tags.
+- The only things an agent pushes are the branch of its open pull request and plan-step tags.
+  Agents never push release tags (`v*`): pushing one publishes to PyPI.
 - Keep commits bite-sized, so a human can read through them one at a time: one logical change per commit, with a message that says what and why.
   Keep moves, renames and formatting in their own commits, apart from changes in behaviour.
 - Never squash, never force-push, never rebase a pushed branch.
@@ -110,6 +111,11 @@ The environment is managed with [pixi](https://pixi.sh); its configuration lives
 
 - **Plan steps:** `step/<issue>-<n>` (for example `step/6-1`) on the merge commit in `development`, created after the owner has merged the step.
 - **Releases:** `vMAJOR.MINOR.PATCH` ([semver](https://semver.org)) on `master`, after an owner has merged the release into `master`.
+  Only owners push them.
+  The version in `src/plasmasds_utility/__init__.py` must match the tag.
+  Pushing the tag runs `.github/workflows/publish.yml`: it checks the tag (matching the version, on `master`), runs lint and the tests, builds, and publishes to PyPI with trusted publishing from the `pypi` environment, which requires an owner's approval.
+  PyPI never accepts the same file twice, so a failed or bad release is fixed with the next patch version (`0.1.1`), never by moving the tag.
+  After a release, `development` moves to the next version with `.dev0` (for example `0.2.0.dev0`), in a pull request.
 - Tags are annotated and signed: `git tag -s <tag> -m "<summary>" <commit>`, then `git push origin <tag>`.
 
 ## 5. Review lens
