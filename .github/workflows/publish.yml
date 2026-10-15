@@ -1,0 +1,71 @@
+name: Publish
+
+# Publishes a release to PyPI when a release tag (vMAJOR.MINOR.PATCH) is pushed.
+# An owner merges development into master, then signs and pushes the tag on
+# master (AGENTS.md section 4). PyPI trusts this workflow through trusted
+# publishing: no token is stored in the repository. The pypi environment must
+# require an owner's approval and accept only v* tags (repository settings), as
+# the checks below only hold for this copy of the workflow.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # to check that the tag is on master
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: Check the tag
+        run: |
+          version=$(python -c "import re, pathlib; print(re.search(r'__version__ = \"(.+)\"', pathlib.Path('src/plasmasds_utility/__init__.py').read_text()).group(1))")
+          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "the tag ${GITHUB_REF_NAME} does not match the package version ${version}"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor HEAD origin/master; then
+            echo "the tag ${GITHUB_REF_NAME} is not on master"
+            exit 1
+          fi
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          environments: default
+          locked: true
+      - name: Lint and test
+        run: pixi run lint && pixi run test
+      - name: Build
+        run: |
+          python -m pip install build twine
+          python -m build
+          python -m twine check --strict dist/*
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/p/plasmasds_utility
+    permissions:
+      id-token: write  # for trusted publishing
+    steps:
+      # Pinned to commits: this job can obtain a PyPI token.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2

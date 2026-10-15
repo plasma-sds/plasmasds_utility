@@ -1,0 +1,591 @@
+r"""Directories, packaged defaults, the user configuration file and the log file.
+
+Nothing here runs at import time; every function computes its result when called.
+
+Default directories (issue #9):
+
+========  ==================================  =====================================
+          Linux                               Windows
+========  ==================================  =====================================
+data      ``$XDG_DATA_HOME/plasmasds``        ``%LOCALAPPDATA%\plasmasds``
+          (``~/.local/share/plasmasds``)
+config    ``$XDG_CONFIG_HOME/plasmasds``      ``%LOCALAPPDATA%\plasmasds``
+          (``~/.config/plasmasds``)
+log       ``$XDG_STATE_HOME/plasmasds``       ``%LOCALAPPDATA%\plasmasds``
+          (``~/.local/state/plasmasds``)
+========  ==================================  =====================================
+
+An ``XDG_*`` variable that is empty or not an absolute path is ignored, as the XDG
+specification requires; so is an empty or relative ``LOCALAPPDATA``, which falls back to
+``~/AppData/Local``.
+
+Settings come from the packaged ``data/defaults.toml`` (TOML, so it can carry comments
+explaining each setting), read on every new process, with the user's ``config.json`` in
+:func:`config_dir` applied on top, key by key.
+The user file holds only what the user changed, so a release that changes a default
+(host, port, server roots, host key) reaches every user who has not overridden it.
+The packaged ``working_dirs`` is always empty; it is there so that the user's
+``working_dirs`` is validated like every other key.
+"""
+
+import json
+import logging
+import os
+import shlex
+import sys
+import time
+import tomllib
+from importlib import resources
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+from urllib.parse import urlsplit
+
+from plasmasds_utility import _files
+from plasmasds_utility.exceptions import ConfigError, PathError
+
+_APP = "plasmasds"
+_WINDOWS = os.name == "nt"
+CONFIG_FILE = "config.json"
+LOG_FILE = "plasmasds.log"
+
+logger = logging.getLogger("plasmasds_utility")
+
+_settings = None
+_log_handlers = []
+
+
+def _base(variable, fallback):
+    """Return ``$variable/plasmasds``, or ``~/fallback/plasmasds`` if it is unusable."""
+    value = os.environ.get(variable, "")
+    if value and Path(value).is_absolute():
+        return Path(value) / _APP
+    return Path.home() / fallback / _APP
+
+
+def _local_app_data():
+    """Return the Windows directory used for data, configuration and the log."""
+    return _base("LOCALAPPDATA", Path("AppData", "Local"))
+
+
+def config_dir():
+    """Return the directory that holds the user configuration file.
+
+    Returns
+    -------
+    pathlib.Path
+        The directory; it is not created.
+    """
+    if _WINDOWS:
+        return _local_app_data()
+    return _base("XDG_CONFIG_HOME", ".config")
+
+
+def log_dir():
+    """Return the directory that holds the log file.
+
+    Returns
+    -------
+    pathlib.Path
+        The directory; it is not created.
+    """
+    if _WINDOWS:
+        return _local_app_data()
+    return _base("XDG_STATE_HOME", Path(".local", "state"))
+
+
+def default_data_dir():
+    """Return the default data directory, which holds one directory per client prefix.
+
+    Returns
+    -------
+    pathlib.Path
+        The directory; it is not created.
+    """
+    if _WINDOWS:
+        return _local_app_data()
+    return _base("XDG_DATA_HOME", Path(".local", "share"))
+
+
+def env_data_dir():
+    """Return the data directory set by ``PLASMASDS_DATA_DIR``, if any.
+
+    Returns
+    -------
+    pathlib.Path or None
+        The directory with ``~`` expanded, or None when the variable is unset or empty.
+
+    Raises
+    ------
+    ConfigError
+        If the variable is set to a relative path.
+    """
+    value = os.environ.get("PLASMASDS_DATA_DIR", "")
+    if not value:
+        return None
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        raise ConfigError(f"PLASMASDS_DATA_DIR must be an absolute path, got {value!r}")
+    return path
+
+
+SERVER_ACCESS = ("all", "public", "local")
+
+
+def _flag(name):
+    """Return whether an environment variable is set to anything but 0 or false."""
+    return os.environ.get(name, "").strip().lower() not in ("", "0", "false")
+
+
+def _ci():
+    """Return whether this runs in CI (``CI`` set, as in GitHub Actions, GitLab)."""
+    return _flag("CI")
+
+
+def quiet():
+    """Return whether notices go to the log only (``PLASMASDS_QUIET`` is set).
+
+    Read on every call; any value but empty, ``0`` or ``false`` counts.
+    """
+    return _flag("PLASMASDS_QUIET")
+
+
+def notice(text):
+    """Log a notice at INFO and print it to stderr, unless :func:`quiet`.
+
+    For messages that inform rather than warn (the first-get notice, the
+    public-fallback summary at exit, the progress of large transfers);
+    warnings and errors are always printed.
+    """
+    logger.info(text)
+    if not quiet():
+        sys.stderr.write(f"plasmasds_utility: {text}\n")  # one write per line
+        sys.stderr.flush()
+
+
+def server_access():
+    """Return which servers the utility may contact.
+
+    Read from ``PLASMASDS_SERVER_ACCESS`` on every call, ignoring case and
+    surrounding spaces; if it is unset or empty, ``"public"`` when the ``CI``
+    variable is set (to anything but ``0`` or ``false``), else ``"all"``.
+
+    Returns
+    -------
+    str
+        ``"all"`` (both servers), ``"public"`` (only the public server, over
+        HTTPS) or ``"local"`` (no server: local copies only).
+
+    Raises
+    ------
+    ConfigError
+        If the variable has another value.
+    """
+    value = os.environ.get("PLASMASDS_SERVER_ACCESS", "").strip().lower()
+    if not value:
+        return "public" if _ci() else "all"
+    if value not in SERVER_ACCESS:
+        raise ConfigError(
+            f"PLASMASDS_SERVER_ACCESS must be one of {', '.join(SERVER_ACCESS)}, "
+            f"got {os.environ['PLASMASDS_SERVER_ACCESS']!r}"
+        )
+    return value
+
+
+def server_access_note():
+    """Return a phrase saying the server access mode and where it comes from.
+
+    For messages, for example ``"server access is public, because CI is set
+    (set PLASMASDS_SERVER_ACCESS to change it)"``.
+
+    Raises
+    ------
+    ConfigError
+        As for :func:`server_access`.
+    """
+    access = server_access()
+    if os.environ.get("PLASMASDS_SERVER_ACCESS", "").strip():
+        if access == "all":
+            return "server access is all (PLASMASDS_SERVER_ACCESS=all)"
+        return (
+            f"server access is {access} (PLASMASDS_SERVER_ACCESS={access}; unset "
+            "it, or set it to all, to use the servers)"
+        )
+    if access == "public":
+        return (
+            "server access is public, because CI is set (set "
+            "PLASMASDS_SERVER_ACCESS to change it)"
+        )
+    return "server access is all"
+
+
+def _defaults():
+    """Return the packaged defaults as a dict."""
+    text = resources.files("plasmasds_utility").joinpath("data", "defaults.toml")
+    return tomllib.loads(text.read_text(encoding="utf-8"))
+
+
+def _read_user(path):
+    """Return the contents of the user configuration file, or {} if it does not exist.
+
+    Raises
+    ------
+    ConfigError
+        If the file cannot be read, is not valid JSON, or is not a JSON object.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except OSError as error:
+        raise ConfigError(f"cannot read {path}: {error}") from error
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise ConfigError(
+            f"{path} is not valid JSON (line {error.lineno}, column {error.colno}): "
+            f"{error.msg}"
+        ) from error
+    if not isinstance(data, dict):
+        raise ConfigError(
+            f"{path} must contain a JSON object, got {type(data).__name__}"
+        )
+    return data
+
+
+def _merge(defaults, user, path):
+    """Apply the user settings on top of the defaults and validate the result.
+
+    An unknown key only logs a warning, because clients pin the utility: two clients
+    in two environments may share one ``config.json`` while running different versions,
+    and a key added by the newer version must not break the older one.
+    A known key with a value of the wrong type is an error.
+
+    Raises
+    ------
+    ConfigError
+        If a value has the wrong type, a working directory or the SSH key is not an
+        absolute path, or public_url is not an http(s) address.
+    """
+    merged = dict(defaults)
+    for key, value in user.items():
+        if key not in defaults:
+            logger.warning(
+                "%s: ignoring unknown setting %r (from a newer plasmasds_utility?)",
+                path,
+                key,
+            )
+            continue
+        expected = type(defaults[key])
+        if type(value) is not expected:
+            raise ConfigError(
+                f"{path}: setting {key!r} must be of type {expected.__name__}, "
+                f"got {type(value).__name__}"
+            )
+        merged[key] = value
+    for prefix, directory in merged["working_dirs"].items():
+        if not isinstance(directory, str) or not Path(directory).is_absolute():
+            raise ConfigError(
+                f"{path}: working directory for {prefix!r} must be an absolute path, "
+                f"got {directory!r}"
+            )
+    if merged["ssh_key"] and not Path(merged["ssh_key"]).is_absolute():
+        raise ConfigError(
+            f"{path}: ssh_key must be an absolute path, got {merged['ssh_key']!r}"
+        )
+    url = urlsplit(merged["public_url"])
+    if url.scheme not in ("https", "http") or not url.netloc:
+        raise ConfigError(
+            f"{path}: public_url must be a web address starting with https://, "
+            f"got {merged['public_url']!r}"
+        )
+    return merged
+
+
+def settings():
+    """Return the settings: the packaged defaults with the user overrides applied.
+
+    The result is read once per process and cached; saving the user configuration
+    clears the cache.
+
+    Returns
+    -------
+    dict
+        The merged settings. Do not modify it.
+
+    Raises
+    ------
+    ConfigError
+        If the user configuration file cannot be read or holds an invalid value.
+    """
+    global _settings
+    if _settings is None:
+        path = config_dir() / CONFIG_FILE
+        _settings = _merge(_defaults(), _read_user(path), path)
+    return _settings
+
+
+def _write_atomic(path, text):
+    """Write text to path as UTF-8, atomically (see :func:`_files.writing`).
+
+    Readers see either the old or the new content. On failure the temporary file is
+    removed and an existing file is left unchanged.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _files.writing(path) as partial:
+        partial.file.write(bytes(text, "utf-8"))
+
+
+def save_working_dir(prefix, directory):
+    """Save or clear the working directory of one client in the user configuration.
+
+    Other entries in the file, including keys this version does not know, are kept.
+
+    Parameters
+    ----------
+    prefix : str
+        The client prefix.
+    directory : str or None
+        The absolute working directory, or None to remove the saved entry.
+
+    Raises
+    ------
+    ConfigError
+        If the existing file is invalid, or the file cannot be written.
+    """
+    settings()  # refuse to rewrite a file that does not validate
+    path = config_dir() / CONFIG_FILE
+    data = _read_user(path)
+    if directory is None and prefix not in data.get("working_dirs", {}):
+        return  # nothing to remove; do not create the file
+    working_dirs = data.setdefault("working_dirs", {})
+    if directory is None:
+        working_dirs.pop(prefix, None)
+    else:
+        working_dirs[prefix] = directory
+    if not working_dirs:
+        del data["working_dirs"]
+    _write_user(path, data)
+
+
+def save_ssh_key(key_path):
+    """Save or clear the SSH key path in the user configuration.
+
+    Parameters
+    ----------
+    key_path : str or None
+        The absolute path of the private key, or None to remove the setting.
+
+    Raises
+    ------
+    ConfigError
+        If the existing file is invalid, or the file cannot be written.
+    """
+    settings()  # refuse to rewrite a file that does not validate
+    path = config_dir() / CONFIG_FILE
+    data = _read_user(path)
+    if key_path is None:
+        if "ssh_key" not in data:
+            return  # nothing to remove; do not create the file
+        del data["ssh_key"]
+    else:
+        data["ssh_key"] = key_path
+    _write_user(path, data)
+
+
+def ssh_key():
+    """Return the configured SSH key file, or None to use the agent and ~/.ssh.
+
+    Returns
+    -------
+    pathlib.Path or None
+        The key file.
+
+    Raises
+    ------
+    ConfigError
+        If a key is configured but the file does not exist.
+    """
+    value = settings()["ssh_key"]
+    if not value:
+        return None
+    key = Path(value)
+    if not key.is_file():
+        raise ConfigError(
+            f"the SSH key {key} set in {config_dir() / CONFIG_FILE} does not exist; "
+            "set it again with plasmasds_utility.set_ssh_key()"
+        )
+    return key
+
+
+def _write_user(path, data):
+    """Write the user configuration atomically and clear the settings cache."""
+    global _settings
+    text = json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    try:
+        _write_atomic(path, text)
+    except PathError as error:  # from _files.writing; already names the file
+        raise ConfigError(str(error)) from error
+    except OSError as error:
+        raise ConfigError(f"cannot write {path}: {error}") from error
+    _settings = None
+
+
+def start_logging():
+    """Attach the log file and a stderr handler to the ``plasmasds_utility`` logger.
+
+    Called on first use, never at import; calling it again does nothing.
+    Messages of level INFO and above go to ``plasmasds.log`` in :func:`log_dir`, which
+    rotates at 1 MB and keeps three old files.
+    Warnings and errors also go to stderr, so they stay visible: once the logger has a
+    handler, Python no longer prints them by default.
+
+    On Windows, rotation fails while another process has the log open; the logging
+    module then prints the error to stderr and carries on.
+
+    Raises
+    ------
+    ConfigError
+        If the log directory cannot be created.
+    """
+    if _log_handlers:
+        return
+    directory = log_dir()
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise ConfigError(
+            f"cannot create the log directory {directory}: {error}"
+        ) from error
+    file_handler = RotatingFileHandler(
+        directory / LOG_FILE,
+        maxBytes=1_000_000,
+        backupCount=3,
+        encoding="utf-8",
+        delay=True,
+    )
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    )
+    stderr_handler = logging.StreamHandler()
+    stderr_handler.setLevel(logging.WARNING)
+    stderr_handler.setFormatter(
+        logging.Formatter("plasmasds_utility %(levelname)s: %(message)s")
+    )
+    for handler in (file_handler, stderr_handler):
+        logger.addHandler(handler)
+        _log_handlers.append(handler)
+    logger.setLevel(logging.INFO)
+
+
+def _stop_logging():
+    """Detach and close the handlers added by :func:`start_logging` (for tests)."""
+    for handler in _log_handlers:
+        logger.removeHandler(handler)
+        handler.close()
+    _log_handlers.clear()
+    logger.setLevel(logging.NOTSET)
+
+
+# Transfers at least this large (bytes) report their progress; smaller ones log only
+# when done.
+_PROGRESS_SIZE = 50_000_000
+_STATUS_EVERY = 60  # seconds between the status lines of a large transfer
+_clock = time.monotonic  # replaced in the tests
+_hinted = False  # whether the command that follows the log was printed
+
+
+def _follow_hint(windows=None):
+    """Return the command that shows the log file as it grows.
+
+    ``tail -F`` follows the file name, so it keeps going when the log rotates.
+    """
+    path = str(log_dir() / LOG_FILE)
+    if windows if windows is not None else _WINDOWS:
+        quoted = path.replace("'", "''")
+        return f"Get-Content -Wait -Tail 20 '{quoted}'"
+    return f"tail -F {shlex.quote(path)}"
+
+
+def _speed(per_second):
+    """Return a transfer speed for a message: 10.2 MB/s, or 420 kB/s below 1 MB/s."""
+    if per_second >= 1_000_000:
+        return f"{per_second / 1e6:.1f} MB/s"
+    return f"{per_second / 1e3:.0f} kB/s"
+
+
+def _duration(seconds):
+    """Return a rough, readable duration: 40 s, 12 min, 2 h 5 min."""
+    seconds = round(seconds)
+    if seconds < 90:
+        return f"{seconds} s"
+    minutes = round(seconds / 60)
+    if minutes < 90:
+        return f"{minutes} min"
+    return f"{minutes // 60} h {minutes % 60} min"
+
+
+def progress(verb, name, total):
+    """Report the progress of a transfer of 50 MB or more; return its callback.
+
+    When called, prints a start line (see :func:`notice`) with the size; the
+    first one in a process also gives the command that follows the log file.
+    The returned callback takes the bytes transferred so far (and ignores a
+    second argument, as paramiko passes the total too). It logs a line at INFO
+    each time another 10 % is done, and a status line (see :func:`notice`) with
+    how much is done, the average speed since the start, and the time left,
+    when at least 60 seconds have passed since the last one. The callback runs
+    only when data arrives, so a stalled transfer prints nothing until its
+    timeout ends the attempt (with a warning). Smaller transfers, and those of
+    unknown size, report nothing. A retried transfer starts again from zero, so
+    it reports again from its start line, with the speed of that attempt.
+
+    Parameters
+    ----------
+    verb : str
+        What is done, for the messages, for example ``"downloading"``.
+    name : object
+        What is transferred, for the messages.
+    total : int or None
+        The size in bytes, or None if unknown.
+
+    Returns
+    -------
+    callable
+        ``callback(done, total=None)``.
+    """
+    global _hinted
+    if not total or total < _PROGRESS_SIZE:
+        return lambda done, _total=None: None
+    start_line = f"{verb} {name} ({total // 1_000_000} MB)"
+    if not _hinted:
+        _hinted = True
+        start_line += f"; to follow the progress in the log: {_follow_hint()}"
+    notice(start_line)
+    start = last = _clock()
+    reported = 0  # tenths logged so far
+
+    def report(done, _total=None):
+        nonlocal reported, last
+        tenths = min(done * 10 // total, 10)
+        if tenths > reported:
+            reported = tenths
+            logger.info(
+                "%s %s: %d %% (%d of %d MB)",
+                verb,
+                name,
+                tenths * 10,
+                done // 1_000_000,
+                total // 1_000_000,
+            )
+        now = _clock()
+        if now - last >= _STATUS_EVERY and done < total:
+            last = now
+            speed = done / (now - start)  # bytes per second; data has arrived
+            notice(
+                f"{verb} {name}: {done // 1_000_000} of {total // 1_000_000} MB "
+                f"({done * 100 // total} %), {_speed(speed)}, about "
+                f"{_duration((total - done) / speed)} left"
+            )
+
+    return report

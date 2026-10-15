@@ -1,0 +1,160 @@
+# AGENTS.md
+
+Instructions for coding agents working in this repository.
+Human contributors are welcome to follow them too.
+
+Section 1 and the review lens in section 5 are specific to this repository.
+Sections 2–4, 6 and 7 are shared conventions for plasma-sds repositories developed with agents.
+
+## 1. Project
+
+`plasmasds_utility` is a package-agnostic utility that other plasma-sds packages (renate, neuro_bes, synref, …) depend on to move data between the group's data server and a local working directory.
+
+- **Spec of record:** [issue #6](https://github.com/plasma-sds/plasmasds_utility/issues/6), which contains the specification PDF and the discussion that amends it.
+  Where the discussion and the PDF disagree, the discussion wins.
+  The PDF is a direction, not a checklist: build feature set by feature set, as bare-bones as possible.
+- **Board:** [plasma-sds project 10](https://github.com/orgs/plasma-sds/projects/10).
+- **Targets:** Python 3.11+ (decided in #8), Linux and Windows, published on PyPI.
+
+Decisions already made (do not re-open them without an owner):
+
+- Private data is fetched over SSH with paramiko; public data is downloaded with urllib.
+  rsync is a possible future backend, not a current one.
+- The utility owns the server base paths and the default local data directory.
+  Each client owns its prefix (its package name) and the tree below it.
+  A client may set its own working directory, which overrides the utility's default.
+  The local tree mirrors the server tree.
+- Packaged defaults are read-only.
+  They are read on every use, with a per-user JSON file applied on top that holds only the user's overrides; that file is the only configuration file the utility writes.
+  (Overrides only, rather than a full copy, so that changed defaults reach existing users; decided 2026-10-06 on #6.)
+  Nothing is ever written under `site-packages`.
+- Data is downloaded only when it is missing locally.
+  By default the server is not checked if a local copy is present; the first `get()` in a session prints the options for checking.
+  `get(key, update=...)` selects the behaviour: `"never"` (default) keeps the local copy, `"if_newer"` downloads only when the server copy is newer (modification time; a difference in size alone only warns, so local edits are never overwritten), and `"force"` downloads again regardless; `check_updates()` checks every local file.
+  A file restored on the server with an older modification time must be given a fresh one (`touch`) to reach users.
+  (Decided 2026-09-30, refined 2026-10-07 and 2026-10-08 on #15.)
+- Re-downloads triggered by a failed verification are bounded; they never loop.
+- Uploads never lose data on the server: a file there is replaced only when the caller names a key to keep the old one under (`archive_to`, a hard link on the server), and the client owns its archive layout.
+  There is no overwrite flag, and the utility never deletes files on the server.
+  Without server-side locks this holds for one upload of a key at a time; simultaneous uploads of the same key are documented as unsupported.
+  (Decided 2026-10-11 on #16.)
+- `PLASMASDS_SERVER_ACCESS` limits which servers are contacted, not which local copies are used: `all` (default), `public` (only HTTPS; the default when `CI` is set, so a client's CI never contacts the SFTP server) or `local` (no server; set explicitly, for example in cluster jobs).
+  Public data used for want of private data is announced as a fallback in every mode.
+  (Decided 2026-10-13 on #34.)
+- Notices (the first-get notice, the public-fallback summary at exit, the progress of transfers of 50 MB or more: a start line and a status line every minute) go to stderr and the log; `PLASMASDS_QUIET` keeps them in the log only.
+  Warnings and errors always go to stderr.
+  (Decided 2026-10-13 on #35 and #40.)
+- Failures are loud and specific: package-specific exception classes, messages that say where the failure happened, and a rotating log file.
+
+### Commands
+
+The environment is managed with [pixi](https://pixi.sh); its configuration lives in `pyproject.toml`.
+
+- `pixi run test`: the test suite on the newest supported Python.
+- `pixi run -e py311 test`: the test suite on one Python version (`py311` to `py314`), as CI runs it.
+- `PLASMASDS_TEST_SSH_KEY=/path/to/key pixi run test -m private`: the tests that need SSH access to the private data server, with that key; they are deselected by default and skipped without the variable.
+  They upload files with unique names to `plasmasds_utility/test/` in both server trees and remove them afterwards; anything they cannot remove is reported, for an admin to delete.
+- Tests marked `network` download from the public data server and run by default.
+  Offline, use `pixi run test -m "not private and not network"`: a `-m` on the command line replaces the default selection, so `-m "not network"` alone would select the private tests.
+  They include running `examples/get_data.py` and executing `examples/get_data.ipynb` (with `nbclient`, in the test environment only); the notebook is committed without outputs, which a test checks.
+  Nothing that runs in CI contacts the SFTP server: CI has no key, the examples get public data only, and their tests run them with `PLASMASDS_SERVER_ACCESS=public`, with SFTP also pointed at a closed local port (decided 2026-10-11 on #17 and 2026-10-13 on #34); the test fixture clears `CI` and `PLASMASDS_SERVER_ACCESS` for every other test.
+- `pixi run lint`: ruff lint and format check; `pixi run ruff format .` applies the formatting.
+
+"A passing test run" in section 2 means `pixi run lint` and `pixi run test` both pass.
+
+## 2. Workflow
+
+1. **Pick the work.**
+   Take an item from the board, normally one in *Ready*.
+   A plan is broken into sub-issues of its parent issue, one per step.
+   Set the item to *In progress*.
+2. **Branch off `development`.**
+   `git fetch origin && git switch -c <issue>-<slug> --no-track origin/development` (for example `7-skeleton`; just `<slug>` when there is no issue).
+   `--no-track` keeps a bare `git push` from targeting `development`.
+3. **Implement one step**, in bite-sized commits (section 3).
+   Stay inside the step; note anything else you find on the issue instead of fixing it.
+4. **Open a draft pull request.**
+   Push the branch and open the draft PR against `development` in the same step: `git push -u origin <branch> && gh pr create --draft --base development`.
+   The body links the issue (`Closes #N`), names the plan step, and lists what was tested.
+5. **Independent review.**
+   A reviewer that did not write the change audits it against the lens in section 5.
+   Post the findings and how each was resolved as a PR comment, then fix what needs fixing.
+6. **Integrate.**
+   If the branch changes a source, project or manifest file (`*.py`, `pyproject.toml`, `pixi.toml`, `pixi.lock`, CI workflows, packaged data), merge `origin/development` into the branch and run the full test suite on the merged state.
+   Push, and state the result in the PR.
+7. **Mark it ready.**
+   `gh pr ready`, and set the board item to *In review*.
+   Owners review and merge; agents never merge.
+8. **Clean up after the merge.**
+   Tag the step if it was a plan step (section 4).
+   Bring the local `development` up to date with `git switch development && git pull --ff-only` (syncing is not working on it), then delete the branch with `git branch -d <branch>`.
+   If `-d` still refuses, the branch is not merged: stop and find out why.
+
+## 3. Git rules
+
+- Never work on `master`.
+  `development` reaches `master` only through an owner.
+- Never commit on `development` directly, and never push it.
+- The only things an agent pushes are the branch of its open pull request and plan-step tags.
+  Agents never push release tags (`v*`): pushing one publishes to PyPI.
+- Keep commits bite-sized, so a human can read through them one at a time: one logical change per commit, with a message that says what and why.
+  Keep moves, renames and formatting in their own commits, apart from changes in behaviour.
+- Never squash, never force-push, never rebase a pushed branch.
+  Bring `development` in by merging.
+- Delete a merged branch with `git branch -d`, never `git branch -D`.
+- Commits are signed.
+  Every commit message ends with the `Co-Authored-By:` line of the model that wrote the change, and nothing after it.
+- Agents act on GitHub as `leferi99-agent`.
+  Before the first `gh` call of a session, `gh api user -q .login` must print `leferi99-agent`; if it does not, stop and ask.
+
+## 4. Tags
+
+- **Plan steps:** `step/<issue>-<n>` (for example `step/6-1`) on the merge commit in `development`, created after the owner has merged the step.
+- **Releases:** `vMAJOR.MINOR.PATCH` ([semver](https://semver.org)) on `master`, after an owner has merged the release into `master`.
+  Only owners push them.
+  The version in `src/plasmasds_utility/__init__.py` must match the tag.
+  Pushing the tag runs `.github/workflows/publish.yml`: it checks the tag (matching the version, on `master`), runs lint and the tests, builds, and publishes to PyPI with trusted publishing from the `pypi` environment, which requires an owner's approval.
+  PyPI never accepts the same file twice, so a failed or bad release is fixed with the next patch version (`0.1.1`), never by moving the tag.
+  After a release, `development` moves to the next version with `.dev0` (for example `0.2.0.dev0`), in a pull request.
+- Tags are annotated and signed: `git tag -s <tag> -m "<summary>" <commit>`, then `git push origin <tag>`.
+
+## 5. Review lens
+
+The review checks correctness first, then these four properties.
+
+- **Performant**
+  - A cache hit costs a `stat`, with no hashing and no server round-trip.
+  - Transfers stream to disk; files are never held in memory whole.
+  - Connections open lazily and are reused within a session.
+- **Minimal**
+  - Bare-bones: only what the current step needs, no speculative options or layers.
+  - No new dependency without a stated reason.
+    For now: paramiko plus the standard library.
+  - Small public API; everything else is private.
+- **Documented**
+  - Every public function, class and module has a docstring with its parameters, return value and raised exceptions.
+  - The README stays accurate for what is merged.
+  - Decisions are recorded on the issue they affect.
+- **Network-safe**
+  - SSH host keys are verified; unknown hosts are rejected, never auto-accepted.
+  - No secrets in code, packaged defaults, logs, exception messages, test fixtures or PR text.
+  - Every connection and transfer has a timeout; retries are bounded with backoff.
+  - Downloads go to a temporary file in the target directory and are moved into place atomically; a failed transfer leaves no partial file behind.
+  - Resolved paths stay inside their configured base, locally and on the server; a crafted key or name cannot climb out with `..` or an absolute path.
+  - Public downloads use HTTPS where the server offers it.
+
+## 6. Tracking and communication
+
+- **Board:** keep the item's status current (*Backlog → Ready → In progress → In review → Done*).
+- **Plans:** a plan lives as sub-issues of its parent issue, one per step, in order, each small enough for one PR.
+- **Discussions:** for design questions an owner has to decide (*Ideas* or *Q&A*), linked from the affected issue.
+  Record the outcome on that issue, dated.
+- **Language:** English, concise.
+  This is a public repository; write accordingly.
+
+## 7. Text formatting
+
+- In prose files (Markdown documentation, the README, agent instruction files), start a new line only for a new sentence.
+  Headings, paragraphs, list items, table rows and code blocks start on new lines as usual.
+  Never wrap a sentence at a fixed width; inside a list item, indent the following sentences to the item's text.
+- Source files keep the line-length limit their formatter sets.
