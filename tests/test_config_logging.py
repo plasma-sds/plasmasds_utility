@@ -1,3 +1,4 @@
+import io
 import logging
 import shlex
 
@@ -228,3 +229,68 @@ def test_speed():
     assert _config._speed(10_200_000) == "10.2 MB/s"
     assert _config._speed(1_000_000) == "1.0 MB/s"
     assert _config._speed(984_000) == "984 kB/s"
+
+
+class Terminal(io.StringIO):
+    """A stderr that says it is a terminal."""
+
+    def isatty(self):
+        return True
+
+
+@pytest.fixture
+def terminal(monkeypatch):
+    """Return a function that makes stderr a terminal.
+
+    Called in the test itself: pytest sets its own sys.stderr after the fixtures.
+    """
+
+    def use():
+        stream = Terminal()
+        monkeypatch.setattr("sys.stderr", stream)
+        return stream
+
+    return use
+
+
+def test_terminal_gets_coloured_levels(terminal):
+    stream = terminal()
+    _config.start_logging()
+    logger.warning("look here")
+    logger.error("broken")
+    assert stream.getvalue() == (
+        "plasmasds_utility \033[33mWARNING\033[0m: look here\n"
+        "plasmasds_utility \033[31mERROR\033[0m: broken\n"
+    )
+
+
+def test_log_file_stays_plain_on_a_terminal(terminal):
+    stream = terminal()
+    _config.start_logging()
+    logger.warning("look here")
+    text = log_file().read_text("utf-8")
+    assert "WARNING plasmasds_utility: look here" in text
+    assert "\033" not in text
+    assert "\033" in stream.getvalue()
+
+
+def test_no_colour_when_stderr_is_not_a_terminal(capsys):
+    _config.start_logging()
+    logger.warning("look here")
+    assert "\033" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(("value", "coloured"), [("1", False), ("", True)])
+def test_no_color_variable(terminal, monkeypatch, value, coloured):
+    # https://no-color.org: set to anything but empty
+    stream = terminal()
+    monkeypatch.setenv("NO_COLOR", value)
+    _config.start_logging()
+    logger.warning("look here")
+    assert ("\033" in stream.getvalue()) is coloured
+
+
+def test_notices_stay_plain_on_a_terminal(terminal):
+    stream = terminal()
+    _config.notice("for your information")
+    assert stream.getvalue() == "plasmasds_utility: for your information\n"

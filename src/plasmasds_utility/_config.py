@@ -430,6 +430,38 @@ def _write_user(path, data):
     _settings = None
 
 
+_YELLOW, _RED, _RESET = "\033[33m", "\033[31m", "\033[0m"
+
+
+def _colour(stream):
+    """Return whether to colour output to ``stream``.
+
+    Only a terminal is coloured, and not when ``NO_COLOR`` is set to anything but
+    empty (https://no-color.org). Notebooks are not terminals, so they get no colour
+    codes. Both are checked on every call.
+    """
+    if os.environ.get("NO_COLOR"):
+        return False
+    try:
+        return stream.isatty()
+    except (AttributeError, ValueError):  # no isatty, or a closed stream
+        return False
+
+
+class _StderrHandler(logging.StreamHandler):
+    """Write warnings and errors to stderr, their level name coloured in a terminal.
+
+    ``WARNING`` is yellow and ``ERROR`` red; the message itself stays plain.
+    """
+
+    def format(self, record):
+        if _colour(self.stream):
+            colour = _RED if record.levelno >= logging.ERROR else _YELLOW
+            record = logging.makeLogRecord(record.__dict__)  # leave the original
+            record.levelname = f"{colour}{record.levelname}{_RESET}"
+        return super().format(record)
+
+
 def start_logging():
     """Attach the log file and a stderr handler to the ``plasmasds_utility`` logger.
 
@@ -437,7 +469,8 @@ def start_logging():
     Messages of level INFO and above go to ``plasmasds.log`` in :func:`log_dir`, which
     rotates at 1 MB and keeps three old files.
     Warnings and errors also go to stderr, so they stay visible: once the logger has a
-    handler, Python no longer prints them by default.
+    handler, Python no longer prints them by default. On a terminal their level name
+    is coloured (see :class:`_StderrHandler`); the log file is always plain text.
 
     On Windows, rotation fails while another process has the log open; the logging
     module then prints the error to stderr and carries on.
@@ -467,7 +500,7 @@ def start_logging():
     file_handler.setFormatter(
         logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
     )
-    stderr_handler = logging.StreamHandler()
+    stderr_handler = _StderrHandler()
     stderr_handler.setLevel(logging.WARNING)
     stderr_handler.setFormatter(
         logging.Formatter("plasmasds_utility %(levelname)s: %(message)s")
