@@ -7,6 +7,10 @@ Until 1.0, a release that raises the second number (0.1 to 0.2) may change the i
 
 ## [Unreleased]
 
+### Added
+
+- In a terminal, the `WARNING` and `ERROR` prefixes printed to stderr are coloured yellow and red; `NO_COLOR` turns this off, and notebooks and the log file stay plain ([#24](https://github.com/plasma-sds/plasmasds_utility/issues/24)).
+
 ## [0.1.0] - 2026-10-15
 
 The first release.
