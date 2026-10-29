@@ -287,7 +287,8 @@ An unknown setting is ignored with a warning, so a file written by a newer versi
 
 The utility logs what it does to `plasmasds.log` (rotated at 1 MB, three old files kept).
 Warnings and errors are also printed to stderr, and so are a few notices: the first `get()` in a session explains its options, a summary at exit lists the public fallbacks, and large transfers show their progress.
-In a terminal, the `WARNING` and `ERROR` of these lines are coloured yellow and red, unless the environment variable [`NO_COLOR`](https://no-color.org) is set; notebooks and the log file get plain text.
+In a terminal, the `WARNING` and `ERROR` prefixes of warnings and errors are coloured yellow and red, unless the environment variable [`NO_COLOR`](https://no-color.org) is set; notebooks and the log file get plain text.
+The old Windows console (`cmd.exe` without virtual-terminal processing) shows the colour codes as text; Windows Terminal and VS Code show the colours, and `NO_COLOR` turns them off everywhere.
 To keep the notices in the log only, for example when many processes run in parallel, set the environment variable `PLASMASDS_QUIET` to anything but empty, `0` or `false` (for example `1`); warnings and errors are still printed.
 This concerns the utility's own output: a program that sends all log messages to the terminal itself, for example with `logging.basicConfig(level=logging.INFO)`, still shows them.
 
