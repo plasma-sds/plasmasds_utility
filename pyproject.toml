@@ -27,6 +27,7 @@ classifiers = [
 [project.urls]
 Repository = "https://github.com/plasma-sds/plasmasds_utility"
 Issues = "https://github.com/plasma-sds/plasmasds_utility/issues"
+Changelog = "https://github.com/plasma-sds/plasmasds_utility/blob/master/CHANGELOG.md"
 
 [tool.hatch.version]
 path = "src/plasmasds_utility/__init__.py"
