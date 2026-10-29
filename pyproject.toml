@@ -33,7 +33,7 @@ Changelog = "https://github.com/plasma-sds/plasmasds_utility/blob/master/CHANGEL
 path = "src/plasmasds_utility/__init__.py"
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "tests", "examples", "README.md", "LICENSE"]
+include = ["src", "tests", "examples", "README.md", "CHANGELOG.md", "LICENSE"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
