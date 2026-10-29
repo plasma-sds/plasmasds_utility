@@ -62,6 +62,11 @@ The environment is managed with [pixi](https://pixi.sh); its configuration lives
 
 "A passing test run" in section 2 means `pixi run lint` and `pixi run test` both pass.
 
+### Changelog
+
+A pull request that changes what users or client packages see adds a line under *Unreleased* in `CHANGELOG.md` ([Keep a Changelog](https://keepachangelog.com/en/1.1.0/)).
+A release pull request moves those lines under the new version and its date.
+
 ## 2. Workflow
 
 1. **Pick the work.**
