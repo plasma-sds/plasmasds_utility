@@ -1,6 +1,7 @@
 """Move data between the plasma-sds data server and a local working directory.
 
-The package is under development; see issue #6 for the design.
+How to use it is in the README; the design, and the decisions that amend it,
+are in issue #6: https://github.com/plasma-sds/plasmasds_utility/issues/6
 """
 
 from plasmasds_utility.client import (
@@ -18,7 +19,7 @@ from plasmasds_utility.exceptions import (
     TransferError,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.2.0.dev0"
 
 __all__ = [
     "AlreadyOnServerError",
