@@ -27,5 +27,5 @@ The first release.
 - A rotating log file, and progress notices for transfers of 50 MB or more.
 - Safety: SSH host keys are verified, transfers have timeouts and bounded retries, downloads are moved into place atomically, and data keys cannot leave their base directory.
 
-[Unreleased]: https://github.com/plasma-sds/plasmasds_utility/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/plasma-sds/plasmasds_utility/compare/v0.1.0...development
 [0.1.0]: https://github.com/plasma-sds/plasmasds_utility/releases/tag/v0.1.0
