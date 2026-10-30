@@ -433,19 +433,53 @@ def _write_user(path, data):
 _YELLOW, _RED, _RESET = "\033[33m", "\033[31m", "\033[0m"
 
 
+_VT_PROCESSING = 0x0004  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+
+
+def _windows_colours(stream):
+    """Return whether the Windows console behind ``stream`` shows colour codes.
+
+    Windows consoles show them from Windows 10 on, but only once a program has
+    switched this on for the console (Windows Terminal has it on already); this
+    switches it on, which then lasts as long as the console. A console that cannot
+    do it, or a stream that is not a console, gives False.
+    """
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    try:
+        handle = msvcrt.get_osfhandle(stream.fileno())
+    except (AttributeError, OSError, ValueError):  # no file behind it, or closed
+        return False
+    kernel32 = ctypes.WinDLL("kernel32")
+    kernel32.GetConsoleMode.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+    kernel32.SetConsoleMode.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    mode = wintypes.DWORD()
+    if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+        return False  # not a console
+    if mode.value & _VT_PROCESSING:
+        return True
+    return bool(kernel32.SetConsoleMode(handle, mode.value | _VT_PROCESSING))
+
+
 def _colour(stream):
     """Return whether to colour output to ``stream``.
 
     Only a terminal is coloured, and not when ``NO_COLOR`` is set to anything but
     empty (https://no-color.org). Notebooks are not terminals, so they get no colour
-    codes. Both are checked on every call.
+    codes. On Windows, the console must also show colour codes; see
+    :func:`_windows_colours`. All of this is checked on every call.
     """
     if os.environ.get("NO_COLOR"):
         return False
     try:
-        return stream.isatty()
+        terminal = stream.isatty()
     except (AttributeError, ValueError):  # no isatty, or a closed stream
         return False
+    if terminal and sys.platform == "win32":
+        return _windows_colours(stream)
+    return terminal
 
 
 class _StderrHandler(logging.StreamHandler):

@@ -1,6 +1,7 @@
 import io
 import logging
 import shlex
+import sys
 
 import pytest
 
@@ -243,11 +244,13 @@ def terminal(monkeypatch):
     """Return a function that makes stderr a terminal.
 
     Called in the test itself: pytest sets its own sys.stderr after the fixtures.
+    On Windows, the fake terminal counts as a console that shows colours.
     """
 
     def use():
         stream = Terminal()
         monkeypatch.setattr("sys.stderr", stream)
+        monkeypatch.setattr(_config, "_windows_colours", lambda stream: True)
         return stream
 
     return use
@@ -294,3 +297,77 @@ def test_notices_stay_plain_on_a_terminal(terminal):
     stream = terminal()
     _config.notice("for your information")
     assert stream.getvalue() == "plasmasds_utility: for your information\n"
+
+
+@pytest.fixture
+def windows(monkeypatch):
+    """Make _colour take its Windows branch, with a stand-in console check.
+
+    Returns the streams the check was asked about, and a dict whose ``"value"``
+    is the check's answer.
+    """
+    calls = []
+    answer = {"value": True}
+
+    def check(stream):
+        calls.append(stream)
+        return answer["value"]
+
+    monkeypatch.setattr(_config.sys, "platform", "win32")
+    monkeypatch.setattr(_config, "_windows_colours", check)
+    return calls, answer
+
+
+def test_windows_terminal_colours_when_the_console_can(windows):
+    calls, answer = windows
+    stream = Terminal()
+    assert _config._colour(stream) is True
+    answer["value"] = False
+    assert _config._colour(stream) is False
+    assert calls == [stream, stream]
+
+
+def test_windows_console_is_left_alone_without_colour(windows, monkeypatch):
+    calls, _ = windows
+    assert _config._colour(io.StringIO()) is False  # not a terminal
+    monkeypatch.setenv("NO_COLOR", "1")
+    assert _config._colour(Terminal()) is False
+    assert calls == []
+
+
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="Windows console")
+
+
+@windows_only
+def test_windows_check_on_streams_that_are_not_consoles(tmp_path):
+    assert _config._windows_colours(io.StringIO()) is False  # no file behind it
+    with open(tmp_path / "plain.txt", "w") as file:
+        assert _config._windows_colours(file) is False  # a file, not a console
+
+
+@windows_only
+def test_windows_check_switches_colours_on_in_a_console():
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    try:
+        console = open("CONOUT$", "w")  # closed in finally
+    except OSError:
+        pytest.skip("no console attached")
+    kernel32 = ctypes.WinDLL("kernel32")
+    kernel32.GetConsoleMode.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+    kernel32.SetConsoleMode.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    handle = msvcrt.get_osfhandle(console.fileno())
+    original = wintypes.DWORD()
+    try:
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(original)):
+            pytest.skip("CONOUT$ is not a console")
+        kernel32.SetConsoleMode(handle, original.value & ~_config._VT_PROCESSING)
+        assert _config._windows_colours(console) is True
+        mode = wintypes.DWORD()
+        kernel32.GetConsoleMode(handle, ctypes.byref(mode))
+        assert mode.value & _config._VT_PROCESSING
+    finally:
+        kernel32.SetConsoleMode(handle, original.value)
+        console.close()
