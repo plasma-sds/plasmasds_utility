@@ -111,6 +111,7 @@ ENV_VARIABLES = (
     "PLASMASDS_DATA_DIR",
     "PLASMASDS_SERVER_ACCESS",
     "PLASMASDS_QUIET",
+    "NO_COLOR",  # the colour tests set it themselves
     "CI",  # set in GitHub Actions, where it would make server access public
     "SSH_AUTH_SOCK",  # never use the real SSH agent
 )
